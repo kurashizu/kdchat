@@ -181,6 +181,10 @@ Klaude avatar 头顶有一块像素显示屏，靠 OSC avatar 参数逐页传输
 - [VRChat OSC Overview](https://docs.vrchat.com/docs/osc-overview)
 - [OSC as Input Controller（聊天框部分）](https://docs.vrchat.com/docs/osc-as-input-controller)
 
+## 许可证
+
+代码按 [MIT 许可证](LICENSE) 发布。字体另有许可证，见下一节。
+
 ## 字体
 
 显示屏的字体图集 `kd_display/generated/kd_font.png` 来自 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)，
