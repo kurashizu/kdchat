@@ -1,0 +1,26 @@
+# systemd unit for vrc-chatbox. Install (replace USER and the path if you cloned elsewhere):
+#   sudo cp deploy/vrc-chatbox.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vrc-chatbox
+[Unit]
+Description=VRChat chatbox HTTP -> OSC bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=USER
+WorkingDirectory=/home/USER/vrc-chatbox
+# app.py reads .env (password, VRChat address, LISTEN_PORT) from its own directory
+ExecStart=/usr/bin/env uv run --project /home/USER/vrc-chatbox python app.py
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/home/USER/vrc-chatbox/server.log
+StandardError=append:/home/USER/vrc-chatbox/server.log
+
+# read-only system directories; the home stays writable (uv writes ~/.cache/uv)
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

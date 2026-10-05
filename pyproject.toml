@@ -1,0 +1,11 @@
+[project]
+name = "vrc-chatbox"
+version = "0.1.0"
+description = "HTTP→OSC bridge that sends messages to a remote VRChat chatbox"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "pillow>=12.3.0",
+    "python-osc>=1.10.2",
+    "uvicorn[standard]>=0.52.1",
+]

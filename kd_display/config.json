@@ -1,0 +1,174 @@
+{
+  "_doc": "Klaude OSC display. Single source of truth for the avatar side (build.py -> shaders, layout, font atlas) and the client (kd package). Change a value, run build.py, then Setup2.All() in Unity. width/height = the screen (text coordinates); the graphics plane is width/gfx_scale x height/gfx_scale pixels. Animating material values costs ~n^2 per renderer per frame, so graphics memory is kept small and split over renderers.",
+
+  "screen": {
+    "width": 176,
+    "sizes": [[176, 96], [128, 128], [208, 80], [160, 112], [112, 144], [96, 176]],
+    "_sizes_doc": "screen sizes the avatar switches between at run time (register screen = index, +16 = low-resolution graphics: 2x2 px dots, a quarter of the data; Display.set_size(i, lowres)), all about 128x128 pixels in 16 px steps: 176x96 (chat), 128x128, 208x80, 160x112, 112x144, 96x176 (pictures pick the closest aspect). Memory and text header are sized for the largest; size_m = the width of a 128 px wide screen in metres (wider sizes are wider).",
+    "height": 96,
+    "tile": 8,
+    "gfx_scale": 1,
+    "size_m": 0.40,
+    "off_color": [0.02, 0.02, 0.025],
+    "bezel_color": [0.93, 0.89, 0.82],
+    "bezel_px": 8,
+    "bezel_top_px": 16,
+    "frame": {
+      "_doc": "Frame around the screen (shader-drawn on the bezel quad, lit by the world): bezel_color = body, bezel_px = width in screen pixels (placement keeps the whole frame clear of the body). radius_px = outer corner radius; edge = thin outline; lip = recess around the screen; led = indicator dot in the bottom bezel (null = none).",
+      "radius_px": 9,
+      "edge_color": [0.42, 0.36, 0.31],
+      "lip_color": [0.10, 0.10, 0.11],
+      "led_color": [0.85, 0.47, 0.34],
+      "led_synced": [0.30, 0.85, 0.40],
+      "led_syncing": [0.98, 0.66, 0.15],
+      "label": "Klaude Display",
+      "label_color": [0.36, 0.30, 0.26],
+      "_mascot_doc": "Klawd (the mascot), left of the label on the top bar: o = body, e = eye, . = frame. Rows are doubled: in the terminal each half-block pixel is twice as tall as wide.",
+      "mascot": ["...oooooooooooo..", "...oooooooooooo..",
+                 "...ooeoooooeoo...", "...ooeoooooeoo...",
+                 ".oooooooooooooooo", ".oooooooooooooooo",
+                 "...oooooooooooo..", "...oooooooooooo..",
+                 "....o.o....o.o...", "....o.o....o.o..."],
+      "mascot_step": ["...oooooooooooo..", "...oooooooooooo..", "...ooeoooooeoo...", "...ooeoooooeoo...", ".oooooooooooooooo", ".oooooooooooooooo", "...oooooooooooo..", "...oooooooooooo..", "...o...o..o...o..", "...o...o..o...o.."],
+      "_anim_doc": "Klawd walks in place: mascot / mascot_step alternate at walk_hz, the step frame 1 px higher (a bob); the eyes close for blink_s every blink_every_s seconds. Shader only (each viewer's own clock).",
+      "walk_hz": 2.5, "blink_every_s": 3.7, "blink_s": 0.16,
+      "mascot_color": [0.85, 0.47, 0.34],
+      "mascot_eye": [0.10, 0.08, 0.07]
+    },
+    "pixel_gap": 0.12,
+    "glow": 1.2
+  },
+
+  "color": {
+    "_doc": "bpp = graphics bits per pixel. 1: attribute colour (2 colours per 8x8 tile, 1 B per tile); 2: NES style (4 colours per tile, 2 B per tile). Each tile entry holds one 4-bit palette index per pixel value. Palette = 16 colours, sent as RGB565. Mono mode (register) maps every colour's luminance onto mono_bg..mono_fg.",
+    "bpp": 2,
+    "palette": [
+      [0, 0, 0], [255, 255, 255], [170, 170, 170], [85, 85, 85],
+      [217, 119, 87], [220, 40, 40], [250, 210, 60], [60, 180, 75],
+      [70, 200, 210], [50, 90, 220], [140, 70, 200], [240, 130, 180],
+      [130, 80, 40], [20, 30, 80], [20, 80, 40], [240, 225, 190]
+    ],
+    "mono_fg": 1,
+    "mono_bg": 0
+  },
+
+  "sync": {
+    "payload_bytes": 30,
+    "param_prefix": "KD_",
+    "rate_hz": 3.0,
+    "refresh": true,
+    "refresh_rate_hz": 3.0,
+    "refresh_busy_share": 0.25,
+    "refresh_core_share": 0.34,
+    "zero_refresh_s": 120,
+    "_refresh_doc": "refresh = send every non-zero page again in turn (late joiners, lost frames; one-way OSC, the client never knows who joined) at refresh_rate_hz when idle (= rate_hz: idle frames are free); while new content keeps coming, every 1/refresh_busy_share-th frame is still a refresh frame, so nothing static ever starves. refresh_core_share of the refresh frames go to the core pages (palette, registers, sprite registers, text) so a late joiner sees text and the screen state within seconds; the rest walk the graphics pages."
+  },
+
+  "text": {
+    "area_bytes": 630,
+    "max_glyphs": 360,
+    "max_runs": 64,
+    "len_bits": 5,
+    "font_dir": "fonts",
+    "font_files": ["fusion-pixel-12px-monospaced-zh_hans.bdf", "fusion-pixel-12px-monospaced-ja.bdf", "fusion-pixel-12px-monospaced-zh_hant.bdf"],
+    "cell": 12,
+    "half": 6,
+    "atlas_size": 512,
+    "common_bits": 12,
+    "ext_bits": 13,
+    "ascii_bits": 7,
+    "fallback_char": "□",
+    "gap_px": 1,
+    "line_gap_px": 2
+  },
+
+  "photo": {
+    "coefs": 10,
+    "dc_bits": 6,
+    "ac_bits": 4,
+    "ac_range": 2.0,
+    "chroma_bits": 4
+  },
+
+  "registers": ["flags", "gfx_mode", "gfx_x", "gfx_y", "text_x", "text_y", "mono",
+                "gfx_vx", "gfx_vy", "text_vx", "text_vy", "fx", "cycle", "timing", "blink_view", "win_x", "win_y",
+                "pad", "sumG_hi", "sumG_lo", "sumT_hi", "sumT_lo", "sumH_hi", "sumH_lo", "text_wrap_x", "text_wrap_y", "text_move", "text_clip_y0", "text_clip_y1", "screen", "sumI_hi", "sumI_lo", "sumJ_hi", "sumJ_lo", "sumK_hi", "sumK_lo", "show", "size"],
+  "_registers_doc": "STATE registers (late joiners get them from the refresh like any page): flags 1 on, 2 invert, 4 graphics, 8 text, 16 mono, 32 photo dither, 64 sprites, 128 window | gfx_mode 0 raw 1 photo | gfx_x/gfx_y, text_x/text_y: layer offset in screen pixels (content moves by +offset, wraps; graphics at zoom 1 units) | mono fg<<4|bg | gfx_vx..text_vy: auto-scroll, signed px/s (TIME based: every viewer runs his own clock, the phase differs between viewers) | fx: transition, bits 0-2 effect (0 cut 1 fade 2 wipe right 3 wipe down 4 slide from right 5 slide from bottom 6 dissolve 7 iris), bit 3 hide (else show), bits 4-5 duration (0.25/0.5/1/2 s), bit 6 toggles to replay | cycle: palette cycling start<<4|length | timing: cycle steps/s<<4 | blink frequency in 0.5 Hz steps | blink_view: blink colour<<4 | zoom bits 0-1 (0 x1 1 x2 2 x4) | 4 mirror x | 8 mirror y | win_x / win_y: graphics window x0<<4|x1 in 16 screen px cells (inclusive) | sumG / sumT: 16-bit checksums (sum of the renderer's 16-bit words mod 65536, the two checksum words left out), written by the client once everything else has been sent; every viewer's shader sums its own copy and lights the status LED green when it matches (amber blinking: still arriving) | text_wrap_x / text_wrap_y: wrap period of the moving text in 8 px units (0 = the screen size, the old behaviour; else a glyph leaving one edge re-enters at the other, partly visible on both: smooth marquees of text longer than the screen) | text_move: 0 = every run moves with text_x / text_y and wraps on the whole screen; n > 0 = only runs n-1.. move, the vertical wrap counts from text_clip_y0 and they are clipped to the rows text_clip_y0 .. text_clip_y1 (0 = the bottom); the earlier runs stay put",
+
+  "sprites": {
+    "_doc": "Hardware sprites, drawn by the text renderer (a renderer of their own would be one more material: PC Good allows 8, used: body 1 + sparkle 1 + display 5). Region = per sprite x, y, attr (3 B), then per sprite colours (2 B: palette index of pixel values 0-3, value 0 = transparent), then patterns (size x size, 2 bpp, rows MSB first). The registers come first, so moving a sprite changes one page. x / y = screen position + 32 (sprites can sit partly outside). attr: 1 visible, 2 flip x, 4 flip y, 8 double size, 16 above the text.",
+    "count": 4,
+    "size": 16,
+    "offset": 32
+  },
+  "effects": {
+    "clip_seconds": 2.0,
+    "durations": [0.25, 0.5, 1.0, 2.0],
+    "names": ["cut", "fade", "wipe_right", "wipe_down", "slide_left", "slide_up", "dissolve", "iris"],
+    "wait_s": 10
+  },
+
+  "renderers": [
+    {"name": "KDisplayG", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [0, 56], "draws": ["bezel", "tiles"], "checksum": "sumG"},
+    {"name": "KDisplayG2", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [56, 112], "draws": ["tiles", "status"], "checksum": "sumH"},
+    {"name": "KDisplayG3", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [112, 168], "draws": ["tiles", "status"], "checksum": "sumI"},
+    {"name": "KDisplayG4", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [168, 224], "draws": ["tiles", "status"], "checksum": "sumJ"},
+    {"name": "KDisplayG5", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [224, 9999], "draws": ["tiles", "status"], "checksum": "sumK"},
+    {"name": "KDisplayT", "regions": ["text", "sprites", "palette", "regs"], "draws": ["sprites", "glyphs", "status"], "checksum": "sumT"}
+  ],
+
+  "anchor": {
+    "_doc": "The anchor follows the head bone (smoothed by 'follow' per frame). The shader then offsets the screen centre in the avatar's own axes; all distances in metres relative to the head bone, measured on the avatar (2026-10-04). Side / front distances include half the screen width because the billboard turns to every viewer and sweeps that radius.",
+    "follow": 0.12,
+    "gap": 0.04,
+    "hair_top": 0.32,
+    "head_radius": 0.17,
+    "shoulder_y": -0.01,
+    "shoulder_radius": 0.31,
+    "side_y": 0.08,
+    "chin": -0.107,
+    "torso_radius": 0.22
+  },
+
+  "menu": {
+    "_doc": "Expression menu (PC): buttons Top / Left / Right / Front -> pos_param (Int 0..3, LOCAL + saved); a local parameter driver copies it into the synced Bools pos_bits (bit 0, bit 1): 2 bits instead of 8. The size is register size (set by the client, Display.set(size_m=...)): 1..255 = size_min..size_max m, 0 = not set yet = screen.size_m.",
+    "pos_param": "KD_Pos",
+    "pos_bits": ["KD_PosA", "KD_PosB"],
+    "size_min": 0.20,
+    "size_max": 0.60
+  },
+
+  "commands": {
+    "_doc": "Command frames: page ids above the memory pages that DO something on the avatar for a moment (an FX layer state entered while the id is on the wire); the payload is ignored. Allocated from 255 down so they never move when the memory grows (the clear command is pages + 1). Not seen by late joiners: one-shot effects only, states go in registers.",
+    "chime": 255
+  },
+
+  "show": {
+    "_doc": "Appear / leave: register show (1 = shown), written by the client from Display.set(on=...); an FX layer watches that register byte while its page is on the wire and plays _KDShow 0 -> 1 over appear_s when it turns 1, 1 -> 0 over leave_s when 0; the shader pops the whole device in with an overshoot, then the screen opens from a line (CRT power-on); leaving runs it backwards. A late joiner / avatar reload gets it with the register refresh. (Was the synced Bool KD_On: a register costs no parameter bits.)",
+    "register": "show",
+    "appear_s": 0.8,
+    "leave_s": 0.45
+  },
+
+  "sound": {
+    "_doc": "Notification sound on the avatar: command frame (page id = command, see commands) sent by Display.chime(); an FX layer plays the clip on the avatar's shared one-shot AudioSource when that id is on the wire. Everyone in earshot hears it once; a late joiner does not (a command is a moment, not a state). The clip is synthesized by build.py (two-note chime). (Was the synced Bool KD_Sfx.)",
+    "command": "chime",
+    "volume": 0.55,
+    "near_m": 1.0,
+    "far_m": 12.0
+  },
+
+  "osc": {
+    "host": "127.0.0.1",
+    "port": 9000,
+    "listen_port": 9001
+  },
+
+  "unity": {
+    "shader_prefix": "Klaude/Display",
+    "shader_dir": "../Scripts/Shaders",
+    "layout_file": "../Scripts/Display/KDLayout.json",
+    "font_png": "../Textures/KDisplay/kd_font.png",
+    "sound_wav": "../Textures/KDisplay/kd_chime.wav"
+  }
+}

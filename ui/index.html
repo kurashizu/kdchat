@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#101218">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>VRChat Chatbox</title>
+  <link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">🍳 <b>VRChat Chatbox</b></div>
+    <div class="outputs" aria-label="输出到（可以同时打开）">
+      <button data-mode="chatbox" title="点击打开 / 关闭">🎮 <span class="long">游戏</span>聊天框</button>
+      <button data-mode="kd" title="点击打开 / 关闭">🖥 <span class="long">Klaude </span>显示屏</button>
+    </div>
+    <div class="conn" id="conn" title="服务状态"><i></i><span>连接中…</span></div>
+  </header>
+
+  <main class="grid">
+    <section class="col">
+      <div class="card composer">
+        <div class="editing" id="editing" hidden><span>✎ 正在编辑：<b id="editWhat"></b></span><button class="link" id="editCancel">取消</button></div>
+        <textarea id="text" rows="1" placeholder="说点什么…  Enter 发送，Shift+Enter 换行，Esc 取消"></textarea>
+        <div class="row between">
+          <div class="toggles">
+            <button class="chip" id="tSfx" title="发送时响一声（游戏聊天框：VRChat 的提示音；显示屏：avatar 上的提示音）">🔔 提示音</button>
+            <button class="chip" id="tTyping" title="打字时显示“正在输入”">⌨️ 输入提示</button>
+            <button class="chip" id="tAuto" title="边打边发：打字时就实时显示（显示屏上原地更新，游戏聊天框每 1.5 秒），Enter 定稿">🔁 边打边发</button>
+          </div>
+          <span class="count" id="count"></span>
+        </div>
+        <div class="row actions">
+          <div class="targets" id="targets" title="这条发到哪里（只影响发送，不关闭输出）">
+            <button data-to="chatbox" aria-label="发到游戏聊天框">🎮</button><button data-to="kd" aria-label="发到 Klaude 显示屏">🖥</button>
+          </div>
+          <button class="btn primary" id="send" aria-label="发送">发送</button>
+          <button class="btn" id="kbFill" title="填进游戏聊天框的键盘，不发送">⌨<span class="long"> 填键盘</span></button>
+          <button class="btn ghost" id="cancel" title="Esc：放弃正在打的这条 / 恢复正在编辑的这条">取消</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h2>最近消息</h2>
+          <button class="link" id="clearHist">清空历史</button>
+        </div>
+        <ul class="history" id="history"></ul>
+      </div>
+    </section>
+
+    <section class="col" id="kdCol" hidden>
+      <div class="card kd">
+        <div class="device"><div class="label"><i></i>Klaude Display</div><img id="prev" alt="显示屏预览"><b id="led"></b></div>
+        <div class="kdstat" id="kdStat">…</div>
+        <div class="row wrap">
+          <button class="btn small" id="chime">🔔 响一声</button>
+          <label class="btn small">🖼 发图片<input type="file" id="file" accept="image/*" hidden></label>
+          <button class="btn small" id="closeImg" hidden>✕ 关闭图片</button>
+          <button class="btn small ghost" id="kdClear">清屏</button>
+        </div>
+        <p class="hint">图片也可以直接粘贴（⌘V / Ctrl+V）或拖到页面上。</p>
+      </div>
+      <details class="card fold" id="settingsFold" open>
+        <summary>显示屏设置</summary>
+        <div id="settings"></div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <a href="/docs">📖 API 文档</a>
+    <span>POST /api/v1/messages · PUT /api/v1/typing · PUT /api/v1/outputs · /api/v1/kd/*</span>
+  </footer>
+  <div class="toasts" id="toasts"></div>
+  <div class="dropzone" id="dropzone">松开显示到 Klaude 显示屏</div>
+  <script src="/ui/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# local config and run-time data (never commit)
+.env
+state.json
+*.log
+
+# deploy leftovers
+backup-*.tgz
+*.bak
+*.bak-*
+._*
+.DS_Store
