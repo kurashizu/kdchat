@@ -6,9 +6,10 @@ import socket
 from typing import Optional
 
 # adapters that are not the LAN a phone is on (VMs, containers, VPNs, tunnels)
-VIRTUAL = ("docker", "veth", "br-", "virbr", "vmnet", "vmware", "virtualbox", "vboxnet", "vethernet", "hyper-v",
-           "wsl", "tailscale", "zerotier", "wireguard", "wg", "tun", "tap", "utun", "ppp", "ipsec", "nordlynx",
-           "hamachi", "radmin", "loopback", "lo", "awdl", "llw", "bridge", "anpi", "gif", "stf")
+VIRTUAL_WORDS = ("vethernet", "hyper-v", "virtualbox", "vmware", "wsl", "tailscale", "zerotier", "wireguard",
+                 "nordlynx", "hamachi", "radmin", "loopback", "bluetooth", "docker", "openvpn", "tap-windows")
+VIRTUAL_PREFIXES = ("lo", "wg", "tun", "tap", "ppp", "gif", "stf", "utun", "awdl", "llw", "anpi", "bridge", "veth",
+                    "virbr", "vmnet", "vboxnet", "br-", "zt", "ham")
 
 
 def _primary_ipv4() -> Optional[str]:
@@ -34,9 +35,12 @@ def _usable(ip: str) -> bool:
 
 
 def _virtual(name: str) -> bool:
+    """by adapter name: "docker0", "utun3", "vEthernet (WSL)" yes; "Wi-Fi", "en0", "Local Area Connection" no"""
     n = name.lower()
-    return any(n.startswith(v) or v in n for v in VIRTUAL if len(v) > 3) or \
-        any(n.startswith(v) for v in VIRTUAL if len(v) <= 3)
+    if any(w in n for w in VIRTUAL_WORDS):
+        return True
+    return any(n.startswith(p) and (p.endswith("-") or len(n) == len(p) or n[len(p)].isdigit() or n[len(p)] in "-_.")
+               for p in VIRTUAL_PREFIXES)
 
 
 def lan_ipv4() -> list[str]:

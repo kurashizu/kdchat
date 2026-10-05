@@ -204,7 +204,9 @@ def test_netinfo_urls():
     for ip in netinfo.lan_ipv4():
         assert not ip.startswith(("127.", "169.254."))
     assert netinfo._virtual("vEthernet (WSL)") and netinfo._virtual("docker0") and netinfo._virtual("utun3")
-    assert not netinfo._virtual("Wi-Fi") and not netinfo._virtual("en0") and not netinfo._virtual("Ethernet")
+    assert netinfo._virtual("lo0") and netinfo._virtual("br-1a2b") and netinfo._virtual("veth12ab")
+    for real in ("Wi-Fi", "en0", "Ethernet", "Ethernet 2", "Local Area Connection", "wlan0", "eth0", "enp3s0", "WLAN"):
+        assert not netinfo._virtual(real), real
 
 
 def test_version_single_source():
