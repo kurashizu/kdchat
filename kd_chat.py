@@ -5,7 +5,7 @@ generated/charmap.json + kd_font.png; standard library only, Pillow for pictures
 uploaded avatar.
 
 Screen (128 x 128 px):
-  header   one 3x5 line: time zone + time, the date, typing dots (a sprite); a rule under it (graphics layer)
+  header   one 3x5 line: time zone + time, the date, "typing.." (sprites); a rule under it (graphics layer)
   log      the chat lines in a ring of LINE SLOTS: every line owns 2 memory pages at a fixed place in the text area and
            a fixed position in a 128 px ring; the ring scrolls with the text_y register. A new line = its slot's pages
            + one register frame, nothing else is resent. Lines are revealed one at a time: the next line is written
@@ -78,8 +78,23 @@ SPEED = {"left": {"slow": 20, "normal": 36, "fast": 60}, "up": {"slow": 8, "norm
 SLOT_MEM = -(-Config().text_bytes // Config().P) - 1   # memory pages for the line slots (the text area's pages, the header takes 1)
 RING = 1 << Config().yb       # ring period (px): every ring position fits the y field, no chaining needed
 TINY_W = 4                   # 3x5 font advance
-# the typing indicator: three dots like the game's bubble, a sprite (no text memory), 2x2 px dots
-DOTS = ["0" * 16] * 2 + ["0110011001100000"] * 2 + ["0" * 16] * 12
+def _tiny_sprites(text, dot_w=2):
+    """3x5 text as 16x16 sprite patterns, left to right, rows 1..5 (the header line); '.' advances dot_w px"""
+    from kd_display.kd.tiny import tiny_pixels
+    ink, x = set(), 0
+    for ch in text:
+        ink |= {(x + px, 1 + py) for px, py in tiny_pixels(ch)}
+        x += dot_w if ch == "." else TINY_W
+    width = max(px for px, _ in ink) + 1
+    pats = [["".join("1" if (16 * k + col, row) in ink else "0" for col in range(16)) for row in range(16)]
+            for k in range(-(-width // 16))]
+    return pats, width
+
+
+# the typing indicator: "typing.." in the header's 3x5 font on two sprites (sprites 1, 2: no text memory); "..." where the
+# header has no room for it
+TYPING_PATS, TYPING_W = _tiny_sprites("typing..")
+TYPING_SHORT, TYPING_SHORT_W = _tiny_sprites("...")
 
 
 def clean_settings(new: dict, old: dict | None = None) -> dict:
@@ -682,7 +697,7 @@ class KdChat:
 
     # ---------------- drawing
     def _header(self):
-        """one 3x5 line: time zone + time on the left, the date on the right, the typing dots (a sprite) before it"""
+        """one 3x5 line: time zone + time on the left, the date on the right, "typing.." (sprites) before it"""
         d, s, c = self.d, self.s, self.d.cfg
         now = datetime.now()
         self._minute = now.strftime("%H:%M")
@@ -690,6 +705,7 @@ class KdChat:
         if not self.header_on:
             d.compose([], id="hdr", page=True, pages=1)
             d.sprite(1, visible=False)
+            d.sprite(2, visible=False)
             d.set(blink=None)
             return
         parts = []
@@ -711,7 +727,14 @@ class KdChat:
             dw = len(date.strip()) * TINY_W
             parts.append({"s": date, "x": c.W - 1 - (n * TINY_W - 1), "y": 1, "scale": "tiny", "color": s["meta"]})
         d.compose(parts, id="hdr", page=True, pages=1)
-        d.sprite(1, x=c.W - 1 - dw - 13, y=0, pattern=DOTS, colors=(TYPING_COLOR, 0, 0), visible=self.typing)
+        right = c.W - dw - (5 if dw else 2)                   # the typing text ends here (a gap before the date)
+        left = 1 + (len(clock) * TINY_W + 3 if s["clock"] else 0)
+        pats, w = (TYPING_PATS, TYPING_W) if right - TYPING_W >= left else (TYPING_SHORT, TYPING_SHORT_W)
+        for k in range(2):
+            if k < len(pats):
+                d.sprite(1 + k, x=right - w + 16 * k, y=0, pattern=pats[k], colors=(TYPING_COLOR, 0, 0), visible=self.typing)
+            else:
+                d.sprite(1 + k, visible=False)
         d.set(blink=None)                                     # the typing indicator stays lit (no blinking)
 
     def _base(self):
