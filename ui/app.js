@@ -569,8 +569,9 @@ async function health() {
 // ---------------------------------------------------------------- server settings: phone access, OSC target, password, address
 // S.cfg = GET /settings: {version, osc, server, password, network, warning}
 const qrUrl = (u) => "/api/v1/network/qr.svg?url=" + encodeURIComponent(u);
-const HOST_RE = /^(?=.{1,253}$)(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}|(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?)$/;
-const validHost = (h) => HOST_RE.test(h) && !(/^[\d.]+$/.test(h) && !/^(\d+\.){3}\d+$/.test(h));
+const IPV4_RE = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+const NAME_RE = /^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$/;
+const validHost = (h) => (/^[\d.]+$/.test(h) ? IPV4_RE.test(h) : NAME_RE.test(h));   // (same rules as the server)
 const validPort = (p) => /^\d+$/.test(String(p)) && +p >= 1 && +p <= 65535;
 let lanPick = 0;
 
