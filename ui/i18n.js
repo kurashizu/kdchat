@@ -7,7 +7,6 @@ const I18N = {
   en: {
     "lang.name": "English",
     "lang.label": "Language",
-    "lang.switchTitle": "Language: English (切换到中文)",
 
     "brand": "VRChat Chatbox",
     "outputs.aria": "Outputs (both can be on at the same time)",
@@ -34,7 +33,7 @@ const I18N = {
     "settings.close": "Close",
     "sec.sending": "Sending",
     "sec.kd": "Klaude display",
-    "sec.more": "History & about",
+    "sec.about": "About",
 
     "opt.sfx": "Sound on send",
     "opt.sfxDesc": "Game chatbox: VRChat's notification sound; display: the avatar's chime.",
@@ -85,7 +84,7 @@ const I18N = {
     "toast.liveOff": "Live typing off: sent only on Enter",
 
     "hist.title": "Recent messages",
-    "hist.clear": "Clear history",
+    "hist.clear": "Clear",
     "hist.confirmClear": "Clear the message history on the server? (The display and the game are not affected.)",
     "hist.empty": "No messages yet",
     "hist.reverted": "(reverted) ",
@@ -234,7 +233,6 @@ const I18N = {
   zh: {
     "lang.name": "中文",
     "lang.label": "语言",
-    "lang.switchTitle": "语言：中文（Switch to English）",
 
     "brand": "VRChat Chatbox",
     "outputs.aria": "输出到（可以同时打开）",
@@ -261,7 +259,7 @@ const I18N = {
     "settings.close": "关闭",
     "sec.sending": "发送",
     "sec.kd": "Klaude 显示屏",
-    "sec.more": "历史和关于",
+    "sec.about": "关于",
 
     "opt.sfx": "发送提示音",
     "opt.sfxDesc": "游戏聊天框：VRChat 的提示音；显示屏：avatar 上的提示音。",
@@ -312,7 +310,7 @@ const I18N = {
     "toast.liveOff": "边打边发已关闭：Enter 才发出",
 
     "hist.title": "最近消息",
-    "hist.clear": "清空历史",
+    "hist.clear": "清空",
     "hist.confirmClear": "清空服务端的消息历史？（不影响显示屏和游戏）",
     "hist.empty": "还没有消息",
     "hist.reverted": "（已撤回）",

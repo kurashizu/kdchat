@@ -34,7 +34,6 @@ function setLang(l, remember) {
   if (remember) store.set("lang", l);
   document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
   applyI18n();
-  $("langBtn").textContent = l === "zh" ? "中" : "EN";
   document.querySelectorAll("#langSeg button").forEach((b) => {
     const on = b.dataset.lang === l; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on);
   });
@@ -44,7 +43,6 @@ function setLang(l, remember) {
   if (S.cfg) paintSettings();
   refreshHistory();
 }
-$("langBtn").onclick = () => setLang(LANG === "zh" ? "en" : "zh", true);
 document.querySelectorAll("#langSeg button").forEach((b) => b.onclick = () => setLang(b.dataset.lang, true));
 
 // ---------------------------------------------------------------- API
@@ -93,7 +91,7 @@ async function setOutputs(part) {
   $("kdCol").hidden = !kd;
   $("settings").hidden = !kd; $("kdOffHint").hidden = kd || !S.kdAvailable;
   $("kdSec").hidden = !S.kdAvailable;
-  $("grid").classList.toggle("two", kd);
+  layoutSide();
   paintTargets();
   if (kd) { if (!S.kd) await loadKd(); refreshKd(true); }
 }
@@ -127,9 +125,11 @@ function paintTargets() {
     b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); b.disabled = !!S.cur;
   });
   $("targets").title = t(S.cur ? "to.locked" : "to.title");
-  const label = t(edit ? "send.save" : !both ? "send.send" : tg.length === 2 ? "send.both" : tg[0] === "kd" ? "send.kd" : "send.chatbox");
+  // the label says what happens; where it goes is shown by the 🎮 / 🖥 targets next to it (both outputs on)
+  const label = t(edit ? "send.save" : "send.send");
+  const where = t(!both ? "send.send" : tg.length === 2 ? "send.both" : tg[0] === "kd" ? "send.kd" : "send.chatbox");
   $("sendLbl").textContent = label;
-  $("send").setAttribute("aria-label", label); $("send").title = label;
+  $("send").setAttribute("aria-label", edit ? label : where); $("send").title = edit ? label : where;
   $("send").classList.toggle("save", !!edit);
   $("send").querySelector(".ico").textContent = edit ? "✓" : "➤";
   $("kbFill").hidden = !S.out.chatbox || !!edit;
@@ -161,8 +161,9 @@ function updateCount() {
   const v = text.value, lines = v ? v.split("\n").length : 0;
   const over = v.length > S.maxChars || lines > S.maxLines;
   const c = $("count");
-  c.textContent = phone() ? t("composer.countShort", { n: v.length, max: S.maxChars })
-                          : t("composer.count", { n: v.length, max: S.maxChars, l: lines, maxl: S.maxLines });
+  // the line count only matters once there is more than one line
+  c.textContent = phone() || lines < 2 ? t("composer.countShort", { n: v.length, max: S.maxChars })
+                                       : t("composer.count", { n: v.length, max: S.maxChars, l: lines, maxl: S.maxLines });
   c.title = t("composer.count", { n: v.length, max: S.maxChars, l: lines, maxl: S.maxLines });
   c.classList.toggle("over", over);
   // phones: the counter only near the limit
@@ -339,7 +340,9 @@ async function refreshHistory() {
   let items = [];
   try { items = (await api("/messages?limit=15")).items || []; } catch { }
   const ul = $("history"); ul.innerHTML = "";
+  $("clearHist").hidden = !items.length;
   if (!items.length) { ul.appendChild(el("li", "empty", t("hist.empty"))); return; }
+  const mixed = new Set(items.map((m) => m.output)).size > 1;     // where it went: only worth showing when it differs
   for (const m of items) {
     const li = el("li", S.cur && S.cur.id === m.id ? "cur" : null);
     const body = el("div", "body");
@@ -347,7 +350,7 @@ async function refreshHistory() {
     const meta = el("div", "m");
     meta.appendChild(el("span", "time", hhmm(m.created_at)));
     const where = { chatbox: t("hist.game"), kd: t("hist.kd"), "chatbox+kd": t("hist.both") }[m.output] || m.output;
-    meta.appendChild(el("span", "badge", where));
+    if (mixed) meta.appendChild(el("span", "badge", where));
     if (m.final === false) meta.appendChild(el("span", "badge edit", t("hist.typing")));
     else if (m.edited && !m.reverted) meta.appendChild(el("span", "badge edit", t("hist.edited")));
     body.appendChild(meta);
@@ -606,6 +609,7 @@ function paintSettings() {
   }
   // the desktop card + the "open on the LAN" notice
   $("phoneCard").hidden = !urls.length || store.get("phoneHidden", false);
+  layoutSide();
   if (urls.length) {
     if ($("phoneQr").dataset.url !== urls[0]) { $("phoneQr").src = qrUrl(urls[0]); $("phoneQr").dataset.url = urls[0]; }
     $("phoneQr").alt = t("lan.qrAlt", { url: urls[0] });
@@ -689,7 +693,14 @@ $("srvReset").onclick = async () => {
 
 $("lanSetPw").onclick = () => { openSheet("pwSec"); setTimeout(() => $("pwNew").focus({ preventScroll: true }), 400); };
 $("lanDismiss").onclick = () => { store.set("lanNoticeOff", true); $("lanNotice").hidden = true; };
-$("phoneHide").onclick = () => { store.set("phoneHidden", true); $("phoneCard").hidden = true; };
+$("phoneHide").onclick = () => { store.set("phoneHidden", true); $("phoneCard").hidden = true; layoutSide(); };
+
+// two columns when the side column has something to show (the display, or the phone card on a computer)
+function layoutSide() {
+  const any = !$("kdCol").hidden || (!$("phoneCard").hidden && !phone());
+  $("side").hidden = !any;
+  $("grid").classList.toggle("two", any);
+}
 
 // ---------------------------------------------------------------- phones: keyboard and the fixed composer
 // Android Chrome shrinks the page for the keyboard (viewport interactive-widget=resizes-content); iOS Safari and older
@@ -710,7 +721,7 @@ text.addEventListener("click", () => setTimeout(layoutViewport, 300));
 text.addEventListener("blur", () => setTimeout(layoutViewport, 300));
 new ResizeObserver(([e]) => document.documentElement.style.setProperty("--composer-h", Math.ceil(e.target.offsetHeight) + "px"))
   .observe($("composer"));
-matchMedia("(max-width: 720px)").addEventListener("change", () => { paintPlaceholder(); updateCount(); paintStatus(); });
+matchMedia("(max-width: 720px)").addEventListener("change", () => { paintPlaceholder(); updateCount(); paintStatus(); layoutSide(); });
 
 // ---------------------------------------------------------------- start
 (async () => {

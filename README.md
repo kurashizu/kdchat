@@ -13,7 +13,7 @@ display above the Klaude avatar's head (the "Klaude display").
 - **Made for phones**: the input stays above the keyboard, big buttons, settings in a bottom sheet. Works on desktop too.
 - **Live typing**: the text shows up in VRChat while you type (Enter finishes it), plus the "typing…" indicator.
 - Edit or revert sent messages, resend from the history, put text into the game keyboard without sending it.
-- **English and Simplified Chinese** (picked from your browser; switch with the language button).
+- **English and Simplified Chinese** (picked from your browser; switch in **Settings ⚙︎**).
 - Optional password, a QR code to open the console on your phone, a REST API with docs.
 
 ## Contents

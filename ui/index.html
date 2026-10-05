@@ -12,7 +12,7 @@
 </head>
 <body>
   <header class="bar">
-    <div class="brand"><img class="logo" src="/ui/icon.svg" alt="" width="22" height="22"><b data-i18n="brand"></b></div>
+    <h1 class="brand"><img class="logo" src="/ui/icon.svg" alt="" width="22" height="22"><span data-i18n="brand"></span></h1>
     <div class="outputs" role="group" data-i18n-aria="outputs.aria">
       <button type="button" data-mode="chatbox" data-i18n-title="out.title" aria-pressed="false">
         <span class="ico" aria-hidden="true">🎮</span><span class="lbl" data-i18n="out.chatbox"></span><i class="led" aria-hidden="true"></i></button>
@@ -20,7 +20,6 @@
         <span class="ico" aria-hidden="true">🖥</span><span class="lbl" data-i18n="out.kd"></span><i class="led" aria-hidden="true"></i></button>
     </div>
     <div class="conn" id="conn" role="status" data-i18n-title="conn.title"><i></i><span data-i18n="conn.connecting"></span></div>
-    <button type="button" class="icon-btn lang" id="langBtn" data-i18n-title="lang.switchTitle" data-i18n-aria="lang.switchTitle"></button>
     <button type="button" class="icon-btn" id="openSettings" data-i18n-title="settings.open" data-i18n-aria="settings.open"
             aria-haspopup="dialog" aria-controls="sheet"><span aria-hidden="true">⚙︎</span></button>
   </header>
@@ -33,19 +32,21 @@
     </span>
   </div>
 
+  <!-- wide screens: composer + history on the left, the display / phone access on the right; phones: the composer is
+       pinned to the bottom -->
   <main class="grid" id="grid">
-    <section class="col">
-      <div class="card composer" id="composer">
-        <div class="editing" id="editing" hidden>
-          <span class="what"><span data-i18n="composer.editing"></span> <b id="editWhat"></b></span>
-          <button type="button" class="btn sm ghost" id="editCancel" data-i18n="composer.cancel"></button>
-        </div>
-        <div class="input-row">
-          <textarea id="text" rows="1" enterkeyhint="send" autocomplete="off" data-i18n-aria="composer.aria"></textarea>
-          <button type="button" class="btn primary send" id="send">
-            <span class="ico" aria-hidden="true">➤</span><span class="lbl" id="sendLbl"></span></button>
-        </div>
-        <div class="tools">
+    <section class="card composer" id="composer" data-i18n-aria="composer.aria">
+      <div class="editing" id="editing" hidden>
+        <span class="what"><span data-i18n="composer.editing"></span> <b id="editWhat"></b></span>
+        <button type="button" class="btn sm ghost" id="editCancel" data-i18n="composer.cancel"></button>
+      </div>
+      <textarea id="text" rows="1" enterkeyhint="send" autocomplete="off" data-i18n-aria="composer.aria"></textarea>
+      <div class="meta">
+        <span class="status" id="status" aria-live="polite"></span>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="tools">
+        <div class="quick">
           <div class="targets" id="targets" role="group" data-i18n-aria="to.aria">
             <button type="button" data-to="chatbox" data-i18n-aria="to.chatbox" aria-pressed="true"><span aria-hidden="true">🎮</span></button>
             <button type="button" data-to="kd" data-i18n-aria="to.kd" aria-pressed="true"><span aria-hidden="true">🖥</span></button>
@@ -54,33 +55,27 @@
             <i class="dot" aria-hidden="true"></i><span data-i18n="opt.liveShort"></span></button>
           <button type="button" class="btn sm ghost" id="kbFill" data-i18n-title="kbFill.title" data-i18n-aria="kbFill.title">
             <span aria-hidden="true">⌨️</span><span class="lbl" data-i18n="kbFill"></span></button>
-          <span class="status" id="status" aria-live="polite"></span>
-          <span class="count" id="count"></span>
-          <button type="button" class="btn sm ghost" id="cancel" hidden data-i18n-title="composer.cancelTitle">
+        </div>
+        <div class="acts">
+          <button type="button" class="btn ghost" id="cancel" hidden data-i18n-title="composer.cancelTitle" data-i18n-aria="composer.cancel">
             <span aria-hidden="true">✕</span><span class="lbl" data-i18n="composer.cancel"></span></button>
+          <button type="button" class="btn primary send" id="send">
+            <span class="ico" aria-hidden="true">➤</span><span class="lbl" id="sendLbl"></span></button>
         </div>
       </div>
-
-      <section class="card phone-card desk-only" id="phoneCard" hidden>
-        <div class="phone-row">
-          <img class="qr" id="phoneQr" alt="" width="116" height="116">
-          <div class="phone-txt">
-            <h2 data-i18n="lan.title"></h2>
-            <p class="hint" data-i18n="lan.scan"></p>
-            <a class="lan-url" id="phoneUrl" href="#" target="_blank" rel="noopener"></a>
-            <button type="button" class="btn sm ghost" id="phoneHide" data-i18n="lan.hide"></button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 data-i18n="hist.title"></h2>
-        <ul class="history" id="history"></ul>
-      </section>
     </section>
 
-    <section class="col" id="kdCol" hidden>
-      <div class="card kd">
+    <section class="card hist" aria-labelledby="histTitle">
+      <div class="card-head">
+        <h2 id="histTitle" data-i18n="hist.title"></h2>
+        <button type="button" class="btn sm ghost" id="clearHist" data-i18n="hist.clear"></button>
+      </div>
+      <ul class="history" id="history"></ul>
+    </section>
+
+    <aside class="side" id="side">
+      <section class="card kd" id="kdCol" hidden aria-labelledby="kdTitle">
+        <h2 class="sr-only" id="kdTitle" data-i18n="out.kdLong"></h2>
         <div class="device"><div class="label"><i></i>Klaude Display</div><img id="prev" data-i18n-alt="kd.previewAlt"><b id="led"></b></div>
         <div class="kdstat" id="kdStat">…</div>
         <div class="kd-actions">
@@ -91,15 +86,23 @@
           <button type="button" class="btn sm ghost" id="kdClear" data-i18n-title="kd.clearTitle"><span data-i18n="kd.clear"></span></button>
         </div>
         <p class="hint desk-only" data-i18n="kd.hint"></p>
-      </div>
-    </section>
-  </main>
+      </section>
 
-  <footer class="foot">
-    <span>vrc-chatbox <b class="ver"></b></span>
-    <a href="/docs" target="_blank" rel="noopener">📖 <span data-i18n="hist.docs"></span></a>
-    <a href="https://github.com/kurashizu/vrc-chatbox" target="_blank" rel="noopener">GitHub</a>
-  </footer>
+      <section class="card phone-card desk-only" id="phoneCard" hidden aria-labelledby="phoneTitle">
+        <div class="card-head">
+          <h2 id="phoneTitle" data-i18n="lan.title"></h2>
+          <button type="button" class="icon-btn sm" id="phoneHide" data-i18n-title="lan.hide" data-i18n-aria="lan.hide"><span aria-hidden="true">✕</span></button>
+        </div>
+        <div class="phone-row">
+          <img class="qr" id="phoneQr" alt="" width="116" height="116">
+          <div class="phone-txt">
+            <p class="hint" data-i18n="lan.scan"></p>
+            <a class="lan-url" id="phoneUrl" href="#" target="_blank" rel="noopener"></a>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
 
   <!-- settings: a bottom sheet on phones, a side drawer on wide screens -->
   <div class="sheet" id="sheet" hidden>
@@ -128,15 +131,6 @@
           <button type="button" class="switch-row" id="sEnter" role="switch" aria-checked="false">
             <span class="txt"><b data-i18n="opt.enter"></b><small data-i18n="opt.enterDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
         </section>
-        <section class="sec" id="lanSec">
-          <h3 data-i18n="lan.title"></h3>
-          <p class="hint" id="lanNone" data-i18n="lan.none" hidden></p>
-          <div class="lan-box" id="lanBox" hidden>
-            <img class="qr" id="lanQr" alt="" width="148" height="148">
-            <div class="lan-list" id="lanList"></div>
-          </div>
-          <p class="hint" data-i18n="lan.hint"></p>
-        </section>
         <section class="sec" id="oscSec">
           <h3 data-i18n="osc.title"></h3>
           <p class="hint"><span data-i18n="osc.current"></span> <b id="oscNow">…</b> <span id="oscSrc" class="src"></span></p>
@@ -152,6 +146,15 @@
             </div>
           </form>
           <p class="hint" data-i18n="osc.hint"></p>
+        </section>
+        <section class="sec" id="lanSec">
+          <h3 data-i18n="lan.title"></h3>
+          <p class="hint" id="lanNone" data-i18n="lan.none" hidden></p>
+          <div class="lan-box" id="lanBox" hidden>
+            <img class="qr" id="lanQr" alt="" width="148" height="148">
+            <div class="lan-list" id="lanList"></div>
+          </div>
+          <p class="hint" data-i18n="lan.hint"></p>
         </section>
         <section class="sec" id="kdSec">
           <h3 data-i18n="sec.kd"></h3>
@@ -191,12 +194,12 @@
           <p class="hint warn" id="srvRestart" data-i18n="srv.restart" hidden></p>
         </section>
         <section class="sec">
-          <h3 data-i18n="sec.more"></h3>
+          <h3 data-i18n="sec.about"></h3>
+          <p class="hint about">vrc-chatbox <b class="ver"></b> · MIT</p>
           <div class="row wrap">
-            <button type="button" class="btn danger" id="clearHist" data-i18n="hist.clear"></button>
             <a class="btn" href="/docs" target="_blank" rel="noopener"><span aria-hidden="true">📖</span><span data-i18n="hist.docs"></span></a>
+            <a class="btn" href="https://github.com/kurashizu/vrc-chatbox" target="_blank" rel="noopener">GitHub</a>
           </div>
-          <p class="hint about">vrc-chatbox <b class="ver"></b> · <a href="https://github.com/kurashizu/vrc-chatbox" target="_blank" rel="noopener">GitHub</a> · MIT</p>
         </section>
       </div>
     </aside>

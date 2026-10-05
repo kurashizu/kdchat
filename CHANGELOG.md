@@ -3,6 +3,27 @@
 All notable changes to vrc-chatbox. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-05
+
+A cleaner console: the same features, better organised, on computers and phones.
+
+### Fixed
+- The send button no longer covers the character / line counter (it did with both outputs on, e.g. "Send to game").
+- Nothing overlaps or runs off the screen at any width, in English and Chinese: the action row wraps instead.
+- The display preview keeps its shape on phones before the first picture arrives.
+
+### Changed
+- Composer: the input, then one line with the status and the counter, then the quick toggles (where to send, Live,
+  Fill keyboard) on the left and Cancel + Send on the right. The send button just says **Send**; where the message goes
+  is shown by the 🎮 / 🖥 buttons next to it. The line count only appears once there is more than one line.
+- Wide screens: the display and **Use it on your phone** sit in a side column next to the input and the history; the
+  display stays in view while you scroll.
+- **Recent messages**: **Clear** is now in the list header (was in Settings); the "Game / Display" tag only appears
+  when the list has messages for different outputs; quieter buttons.
+- Settings: language only here (the extra language button at the top is gone); the VRChat connection comes right after
+  the sending options; the last section is **About** (version, API docs, GitHub). The page footer that repeated it is gone.
+- Proper headings for screen readers.
+
 ## [1.0.0] - 2026-10-05
 
 The first release for everyone: a Windows app, an optional password and settings in the console.
