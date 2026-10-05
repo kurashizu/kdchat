@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 // JS sanity check (plain node, no packages): syntax of ui/*.js, both languages have the same keys, every key the
 // UI uses exists, and placeholders match. Run: node tests/js_check.mjs
 import { readFileSync } from "node:fs";
@@ -10,7 +11,7 @@ let bad = 0;
 const fail = (m) => { console.error("FAIL", m); bad++; };
 
 for (const f of ["i18n.js", "app.js"]) {
-  try { execFileSync(process.execPath, ["--check", new URL(f, ui).pathname], { stdio: "pipe" }); }
+  try { execFileSync(process.execPath, ["--check", fileURLToPath(new URL(f, ui))], { stdio: "pipe" }); }
   catch (e) { fail(`${f}: ${e.stderr}`); }
 }
 
