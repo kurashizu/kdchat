@@ -5,7 +5,7 @@ generated/charmap.json + kd_font.png; standard library only, Pillow for pictures
 uploaded avatar.
 
 Screen (128 x 128 px):
-  header   one 3x5 line: time zone + time, the date, "typing.." (sprites); a rule under it (graphics layer)
+  header   one 3x5 line: time zone + time, the date, "typing.." (sprites); a rule under it (a hardware shape)
   log      the chat lines in a ring of LINE SLOTS: every line owns 2 memory pages at a fixed place in the text area and
            a fixed position in a 128 px ring; the ring scrolls with the text_y register. A new line = its slot's pages
            + one register frame, nothing else is resent. Lines are revealed one at a time: the next line is written
@@ -73,6 +73,7 @@ CHOICES = {
 COLOR_KEYS = ("color", "accent", "meta", "alt")
 HDR = 10                     # header height: one 3x5 line (time zone + time | date), 2 px space, a 2 px rule
 DIVIDER = 3                  # the dividers between messages: dark grey (subtle)
+SHP_RULE, SHP_LOG0 = 0, 1     # hardware shapes: the header rule; from 1 on the log's dividers and the draft caret
 TYPING_COLOR = 15            # the typing indicator: its own palette colour (cream), never offered as a choice
 SPEED = {"left": {"slow": 20, "normal": 36, "fast": 60}, "up": {"slow": 8, "normal": 14, "fast": 22}}
 SLOT_MEM = -(-Config().text_bytes // Config().P) - 1   # memory pages for the line slots (the text area's pages, the header takes 1)
@@ -609,8 +610,7 @@ class KdChat:
         if label:                                                   # one line, right-aligned
             parts.append({"s": label, "x": W - 1 - (len(label) * TINY_W - 1), "y": 1, "scale": "tiny", "color": s["meta"]})
             # the time label is the separator (with a rule as well, a whole first line would not fit its slot)
-        elif s["divider"]:
-            parts.append({"s": "─" * 3, "x": (W - 3 * 13 + 1) // 2, "y": ink - 6, "color": DIVIDER})
+        # (the divider without a label is a hardware shape: _log_shapes)
         return parts
 
     def _lines(self, text, deco, sc=None):
@@ -754,9 +754,12 @@ class KdChat:
         else:
             d.palette(self.base_palette)
             g.clear()
+        # the rule under the header: a hardware shape (no bitmap: with no picture the graphics memory stays empty),
+        # pinned to the graphics layer (FOLLOW) so the log's shape scrolling does not move it
         if self.header_on:
-            ry = (HDR - 2) // c.gscale                           # the rule under the header (2 px)
-            g.line(0, ry, c.GW - 1, ry, s["meta"])
+            d.shapes.rect(SHP_RULE, 0, HDR - 2, c.W, c.gscale, color=s["meta"], fill=s["meta"], width=0, follow=True)
+        else:
+            d.shapes.hide(SHP_RULE)
 
     def _step(self):
         if self.s["layout"] == "single":
@@ -838,10 +841,53 @@ class KdChat:
         pend = self.d.link.pending()
         return any(p in pend for p in self._wait)
 
+    def _log_shapes(self):
+        """dividers between messages + the draft's caret as hardware shapes. They scroll with the log through the shape
+        layer's offset (shape_y = -S, written in the same register page as text_y: same frame as the text): a shape
+        sits at (top + its log y) mod H. One that would leave the band at this scroll or the next one (a reveal's second
+        phase) is hidden now, so it never wraps round into view."""
+        d, s, c = self.d, self.s, self.d.cfg
+        S, top, H = self.S, self.top, c.H
+        S2 = self._phase2 if self._phase2 is not None else S
+        free = list(range(SHP_LOG0, c.shp_n))
+        want = []
+
+        def inside(y0, y1):                                       # log rows y0..y1 visible at both scrolls
+            return all(top <= top + y0 - v and top + y1 - v < H for v in (S, S2))
+        if self.image is None:
+            msgs = self._all()
+            for m in msgs:
+                labelled = s["show_time"] or (m.get("edited") and not m.get("reverted"))
+                if s["divider"] and m.get("gap") and not labelled:
+                    y = m["vy0"] + (m["gap"] - 2) // 2
+                    if inside(y, y):
+                        w = 39
+                        want.append(("div", (c.W - w) // 2, y, w))
+            m = msgs[-1] if msgs else None
+            if m is not None and m.get("draft") and m.get("lines"):
+                k = len(m["lines"]) - 1
+                y = m["vy0"] + m["gap"] + k * self.lh
+                gh = c.glyph_h(m.get("sc", s["scale"]))
+                w, _ = d.measure(m["lines"][k] or " ", c.W, m.get("sc", s["scale"]))
+                x = min(c.W - 2, (w + 1) if m["lines"][k] else 0)
+                if inside(y, y + gh - 1):
+                    want.append(("caret", x, y, gh))
+        for kind, x, y, v in want[-len(free):]:
+            i = free.pop(0)
+            Y = (top + y) % H
+            if kind == "div":
+                d.shapes.line(i, x, Y, x + v - 1, Y, color=DIVIDER)
+            else:
+                d.shapes.rect(i, x, Y, 2, v, color=s["meta"], fill=s["meta"], width=0, anim=("blink", 2))
+        for i in free:
+            d.shapes.hide(i)
+        d.set(shape_y=(-S) % H, shape_x=0, shape_vx=0, shape_vy=0)
+
     def _present_log(self):
         d = self.d
         clip = (self.top, d.cfg.H) if self.image is None else (1, 1)
         d.set(text_y=(-self.S) % RING, text_wrap=(0, RING), text_clip=clip)
+        self._log_shapes()
         P = d.cfg.P
         before = bytes(d.link.want)
         r = d.present()
@@ -866,7 +912,9 @@ class KdChat:
         d.clear_text()
         self._base()
         top = self.top
-        d.set(text_y=0, text_wrap=None, text_clip=None)
+        d.set(text_y=0, text_wrap=None, text_clip=None, shape_y=0)
+        for i in range(SHP_LOG0, c.shp_n):
+            d.shapes.hide(i)
         if m is not None and self.image is None:
             col = s["meta"] if m.get("draft") else s["color"]          # (the highlight marks the newest line of the log)
             text = "message reverted" if m.get("reverted") else m["text"]

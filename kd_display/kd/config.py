@@ -1,7 +1,7 @@
 """Config loading + the derived memory layout. Shared by build.py (avatar side) and the client, so both always agree.
 
 Memory = one flat byte array, synced in pages of `payload_bytes`:
-    [ bitmap | tilecol | palette ]  [ text ]  [ regs ]  [ sprites ]       each bracket starts on a page boundary
+    [ bitmap | tilecol | palette ]  [ text ]  [ regs ]  [ sprites ]  (hole)  [ shapes ]     each bracket starts on a page boundary
 bitmap   GW*GH*bpp/8 bytes (GW = W / gfx_scale), 8x8 tiles row-major, per tile 8 rows of bpp bytes, MSB = left pixel
          (bpp 2: two bits per pixel, MSB pair first). PHOTO mode: the same bytes hold DCT coefficient planes
          (plane 0 = DC of every tile, then AC planes), so a progressive send fills the low addresses first.
@@ -13,6 +13,7 @@ text     runs packed back to back, byte aligned: header + codes (MSB-first bit s
 regs     one byte each (config "registers", meaning in config "_registers_doc"). All registers hold STATE, never
          actions, so a page sent again changes nothing and a late joiner ends up exactly where everyone else is.
 sprites  per sprite x, y, attr; per sprite 2 colour bytes; per sprite a size x size 2 bpp pattern (config "sprites").
+shapes   (after a one-page hole = the clear command's page id) 10 bytes per shape, 3 per page (config "shapes", kd/shapes.py).
 Page id 0 = idle, 1..pages = memory pages, then the command ids (clear graphics).
 On the avatar, byte pairs are packed into 16-bit words (one animated material value each: the animator's cost grows
 with the square of the number of animated values per renderer), and the words are split over renderers (config
@@ -120,15 +121,26 @@ class Config:
         self.spr_pat = self.spr_cols + 2 * self.spr_n
         self.spr_bytes = self.spr_pat + self.spr_n * self.spr_pat_bytes - self.spr_base
         assert self.spr_cols + 2 * self.spr_n - self.spr_base <= P, "sprite registers + colours must share one page"
-        self.mem_bytes = self.spr_base + self.spr_bytes
+        self.spr_end = self.spr_base + self.spr_bytes
+        # command frames: page ids from 255 down (config "commands"), above every memory page and the clear command.
+        # The clear command keeps its page id (commands.clear_gfx) when the memory grows: the regions added later (shapes)
+        # start after it, its page is a hole that is never sent as memory (older clients keep working)
+        self.commands = {k: v for k, v in c.get("commands", {}).items() if not k.startswith("_")}
+        self.id_clear_gfx = self.commands.pop("clear_gfx", pages(self.spr_end) + 1)
+        assert self.id_clear_gfx > pages(self.spr_end), "the clear command's page id lies inside the memory"
+        sh = c.get("shapes", {"count": 0, "bytes": 10, "offset": 32})
+        self.shp_n, self.shp_bytes_per, self.shp_off = sh["count"], sh["bytes"], sh["offset"]
+        self.shp_per_page = P // self.shp_bytes_per
+        self.shp_base = self.id_clear_gfx * P                          # first page after the clear command's id
+        assert P % self.shp_bytes_per == 0, "shapes must not straddle pages"
+        self.shp_bytes = self.shp_n * self.shp_bytes_per
+        self.hole_pages = {self.id_clear_gfx - 1} if self.shp_n else set()   # memory page index whose id is the clear
+        self.mem_bytes = self.shp_base + self.shp_bytes if self.shp_n else self.spr_end
         self.pages = pages(self.mem_bytes)
         fx = c["effects"]
         self.fx_clip = fx["clip_seconds"]
         self.fx_durations = fx["durations"]
-        self.id_clear_gfx = self.pages + 1
-        # command frames: page ids from 255 down (config "commands"), above every memory page and the clear command
-        self.commands = {k: v for k, v in c.get("commands", {}).items() if not k.startswith("_")}
-        assert self.id_clear_gfx < min(self.commands.values(), default=256) and max(self.commands.values(), default=0) <= 255, \
+        assert self.pages < min(self.commands.values(), default=256) and max(self.commands.values(), default=0) <= 255, \
             "page ids: memory pages + clear command run into the command ids"
         mn = c["menu"]
         self.size_min, self.size_max, self.size_m = mn["size_min"], mn["size_max"], s["size_m"]
@@ -136,6 +148,7 @@ class Config:
             "bitmap": (self.bitmap_base, self.bitmap_bytes), "tilecol": (self.tc_base, self.tc_bytes),
             "palette": (self.pal_base, self.pal_bytes), "text": (self.text_base, self.text_bytes),
             "regs": (self.reg_base, len(self.reg_names)), "sprites": (self.spr_base, self.spr_bytes),
+            "shapes": (self.shp_base, self.shp_bytes),
         }
         self.used = bytearray(self.pages * P)
         for a, n in self.regions.values():

@@ -12,6 +12,89 @@ from .memory import Memory, Charmap
 from .layout import Layout
 from .canvas import Canvas
 from .link import Link
+from . import shapes as SH
+
+
+class ShapeLayer:
+    """16 hardware shapes, drawn by the shader from a 10-byte table entry each (kd/shapes.py): moving / recolouring a
+    shape = one frame, no bitmap. Slots are retained: calling a method on slot i again replaces it. Angles in degrees
+    (0 = 12 o'clock, clockwise), positions in screen px. Common options:
+        pattern  "solid" | "checker" | "hstripes" | "vstripes" | "diagonal" | "dots" | "hgradient" | "vgradient"
+        above    draw over the text (default: under it)        xor  invert what is under it (cursors, selections)
+        follow   move and zoom with the graphics layer          anim ("rotate", turns/s) | ("pulse", Hz) | ("blink", Hz)
+                                                                     | ("sweep", turns/s: arc / pie start angle)"""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.data = [None] * cfg.shp_n
+
+    def _put(self, i, kind, coords, raw=(), fill=None, color=1, width=1, pattern="solid", round_caps=False, above=False,
+             xor=False, follow=False, anim=None):
+        if not 0 <= i < self.cfg.shp_n:
+            raise IndexError(f"shape slot {i} (0..{self.cfg.shp_n - 1})")
+        a, sp = None, 0
+        if anim:
+            a, v = anim
+            sp = round(v * 8) if a in ("rotate", "sweep") else round(v * 4)
+            if sp == 0:
+                a = None
+        for v in coords:
+            if not -self.cfg.shp_off <= round(v) <= 255 - self.cfg.shp_off:
+                raise ValueError(f"shape coordinate {v} outside -{self.cfg.shp_off}..{255 - self.cfg.shp_off}")
+        self.data[i] = SH.encode(kind, fill, color, coords, raw, width, pattern, round_caps, above, xor, follow, a, sp,
+                                 self.cfg.shp_off)
+        return i
+
+    @staticmethod
+    def _deg(v):
+        return int(round(v / 360 * 256)) % 256
+
+    def line(self, i, x0, y0, x1, y1, color=1, width=1, round_caps=False, **kw):
+        return self._put(i, "line", (x0, y0, x1, y1), (), None, color, width, round_caps=round_caps, **kw)
+
+    def rect(self, i, x, y, w, h, color=1, fill=None, width=1, radius=0, angle=0, **kw):
+        """w x h pixels from (x, y); fill = fill colour (None: outline only); width = outline (0 with a fill: none)"""
+        raw = {4: self._deg(angle)} if not radius else {4: self._deg(angle), 5: min(255, int(radius))}
+        return self._put(i, "rrect" if radius else "rect", (x, y, x + w - 1, y + h - 1), raw, fill, color, width, **kw)
+
+    def ellipse(self, i, cx, cy, rx, ry=None, color=1, fill=None, width=1, angle=0, **kw):
+        ry = rx if ry is None else ry
+        return self._put(i, "ellipse", (cx, cy), {2: min(255, int(rx)), 3: min(255, int(ry)), 4: self._deg(angle)},
+                         fill, color, width, **kw)
+
+    circle = ellipse
+
+    def arc(self, i, cx, cy, r, start=0, sweep=360, color=1, thickness=None, **kw):
+        sw = 255 if sweep >= 360 else self._deg(sweep)
+        return self._put(i, "arc", (cx, cy), {2: min(255, int(r)), 3: self._deg(start), 4: sw, 5: min(255, int(thickness or 0))},
+                         None, color, max(1, min(7, int(thickness or 1))), **kw)
+
+    def pie(self, i, cx, cy, r, start=0, sweep=90, color=1, fill=None, width=1, **kw):
+        sw = 255 if sweep >= 360 else self._deg(sweep)
+        return self._put(i, "pie", (cx, cy), {2: min(255, int(r)), 3: self._deg(start), 4: sw}, fill, color, width, **kw)
+
+    def tri(self, i, p0, p1, p2, color=1, fill=None, width=1, **kw):
+        return self._put(i, "tri", (*p0, *p1, *p2), (), fill, color, width, **kw)
+
+    def poly(self, i, cx, cy, r, sides=6, star=0.0, angle=0, color=1, fill=None, width=1, **kw):
+        """regular polygon (3..12 sides) or, with star = inner radius / r (0..1), a star with that many points"""
+        inner = max(0, min(15, round(star * 16))) if star else 0
+        return self._put(i, "poly", (cx, cy), {2: min(255, int(r)), 3: (inner << 4) | max(3, min(12, int(sides))),
+                                               4: self._deg(angle)}, fill, color, width, **kw)
+
+    def bezier(self, i, p0, p1, p2, color=1, width=1, **kw):
+        """quadratic curve from p0 to p2 pulled toward p1"""
+        return self._put(i, "bezier", (*p0, *p1, *p2), (), None, color, width, **kw)
+
+    def hide(self, i):
+        self.data[i] = None
+
+    def clear(self):
+        self.data = [None] * self.cfg.shp_n
+
+    def free(self):
+        """the first empty slot (or None)"""
+        return next((k for k, v in enumerate(self.data) if v is None), None)
 
 
 class Display:
@@ -35,7 +118,9 @@ class Display:
         self.state = dict(on=True, invert=False, gfx=True, text=True, mono=False, mono_fg=c["mono_fg"], mono_bg=c["mono_bg"],
                           dither=False, sprites=True, window=None, gfx_x=0, gfx_y=0, text_x=0, text_y=0,
                           gfx_vx=0, gfx_vy=0, text_vx=0, text_vy=0, zoom=1, mirror_x=False, mirror_y=False,
-                          cycle=None, blink=None, text_wrap=None, text_clip=None, size_m=self.cfg.size_m)
+                          cycle=None, blink=None, text_wrap=None, text_clip=None, size_m=self.cfg.size_m,
+                          shape_x=0, shape_y=0, shape_vx=0, shape_vy=0)
+        self.shapes = ShapeLayer(self.cfg)    # hardware shapes (d.shapes.line(...), see kd/shapes.py)
         import random
         self.fx = random.randrange(2) << 6        # transition register; a random toggle so a restart replays nothing stale
         self.fx_queue = []                        # transitions waiting to be written (see transition())
@@ -209,6 +294,7 @@ class Display:
         cycle (start, length, steps_per_s) or None: palette colours start..start+length-1 rotate
         blink (colour, hz) or None: that palette colour blinks to colour 0 (hz in 0.5 steps, up to 7.5)
         size_m: the device's width in metres (a 128 px wide screen; menu size_min .. size_max, register size)
+        shape_x, shape_y, shape_vx, shape_vy: the shape layer's offset / auto-scroll (like the text layer)
         legacy: scroll = graphics rows of 8 graphics px up, text_dy = text_y"""
         for k, v in kw.items():
             if k == "scroll":
@@ -225,7 +311,8 @@ class Display:
                 assert 0 <= wx <= 2040 and wx % 8 == 0 and 0 <= wy <= 510 and wy % 2 == 0, "text_wrap: x in 8 px, y in 2 px steps"
             if k == "text_clip" and v is not None:
                 assert 0 <= v[0] <= v[1] <= self.cfg.H, v      # y0 == y1: the moving text is hidden
-            if k in ("gfx_x", "gfx_y", "text_x", "text_y", "gfx_vx", "gfx_vy", "text_vx", "text_vy"):
+            if k in ("gfx_x", "gfx_y", "text_x", "text_y", "gfx_vx", "gfx_vy", "text_vx", "text_vy",
+                     "shape_x", "shape_y", "shape_vx", "shape_vy"):
                 v = int(round(v))
             self.state[k] = v
 
@@ -344,6 +431,12 @@ class Display:
             m.reg(k, st[k] % 256)
         for k in ("gfx_vx", "gfx_vy", "text_vx", "text_vy"):
             m.reg(k, max(-128, min(127, int(st[k]))) & 0xFF)
+        if self.cfg.shp_n:
+            m.reg("shape_x", st["shape_x"] % self.cfg.W); m.reg("shape_y", st["shape_y"] % self.cfg.H)
+            for k in ("shape_vx", "shape_vy"):
+                m.reg(k, max(-128, min(127, int(st[k]))) & 0xFF)
+            for i in range(self.cfg.shp_n):
+                m.set_shape(i, self.shapes.data[i])
         m.reg("fx", self.fx)
         cy = st["cycle"]
         m.reg("cycle", ((cy[0] & 15) << 4) | (cy[1] & 15) if cy else 0)

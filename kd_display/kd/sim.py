@@ -159,11 +159,53 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
     BG = (0.0, 0.0, 0.0)
     img = [[BG] * W for _ in range(H)]
     cover = [[False] * W for _ in range(H)]
+    zb = [[0.0] * W for _ in range(H)]              # the layer's lift (the shader's depth): XOR shapes respect it
 
-    def put(x, y, col):
+    def put(x, y, col, z=0.3):
         x += shx; y += shy
         if 0 <= x < W and 0 <= y < H:
-            img[y][x] = col; cover[y][x] = True
+            img[y][x] = col; cover[y][x] = True; zb[y][x] = z
+
+    # hardware shapes (kd/shapes.py): lift 0.4 (+ index / 1000) under the text, 0.7 over it; XOR shapes last
+    shp = []
+    if getattr(c, "shp_n", 0):
+        from .shapes import Shape, paint, ABOVE, XOR, FOLLOW, bbox, geometry
+        for i in range(c.shp_n):
+            a0 = c.shp_base + i * c.shp_bytes_per
+            sh = Shape(buf[a0:a0 + c.shp_bytes_per], c.shp_off)
+            if sh.kind:
+                shp.append((i, sh))
+        sox = math.floor(R("shape_x") + s8(R("shape_vx")) * (t % W)) % W if "shape_x" in c.regs else 0
+        soy = math.floor(R("shape_y") + s8(R("shape_vy")) * (t % H)) % H if "shape_y" in c.regs else 0
+        gox = math.floor(R("gfx_x") + s8(R("gfx_vx")) * (t % W)) % W
+        goy = math.floor(R("gfx_y") + s8(R("gfx_vy")) * (t % H)) % H
+
+    def shape_pixels(sh):
+        """screen pixels to test for a shape (its bounding box grown for rotation / pulse, or everything)"""
+        if sh.flags & FOLLOW or sh.speed and sh.anim in (1, 2, 4) or (sh.kind in (2, 3, 4, 8) and sh.raw[4]):
+            return ((x, y) for y in range(H) for x in range(W))
+        b = bbox(sh)
+        dx = sox - (W if sh.pt[0][0] + sox >= W else 0); dy = soy - (H if sh.pt[0][1] + soy >= H else 0)
+        return ((x, y) for y in range(max(0, b[1] + dy - 1), min(H, b[3] + dy + 1))
+                for x in range(max(0, b[0] + dx - 1), min(W, b[2] + dx + 1)))
+
+    def shapes(above, xor=False):
+        for i, sh in shp:
+            if bool(sh.flags & XOR) != xor or (not xor and bool(sh.flags & ABOVE) != above):
+                continue
+            lift = (0.7 if sh.flags & ABOVE else 0.4) + i * 0.001
+            follow = ((gox, goy), z, (W, H))
+            for x, y in shape_pixels(sh):
+                v = paint(sh, x, y, t, ((sox, soy), (W, H)), follow)
+                if v is None:
+                    continue
+                if xor:
+                    X, Y = x + shx, y + shy
+                    if 0 <= X < W and 0 <= Y < H and zb[Y][X] <= lift:
+                        cur = img[Y][X] if cover[Y][X] else BG
+                        img[Y][X] = tuple(_inv_linear(u) for u in cur); cover[Y][X] = True
+                else:
+                    put(x, y, pal(v), lift)
 
     if flags & FLAG_GFX:
         gb = gfx_buffer(buf, c, pal)
@@ -208,8 +250,9 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
                     byte = buf[base + ly * c.spr_row_bytes + (lx >> 2)]
                     v = (byte >> (6 - 2 * (lx & 3))) & 3
                     if v:
-                        put(x + px, y + py, cols[v])
+                        put(x + px, y + py, cols[v], 0.75 if above else 0.45)
 
+    shapes(False)
     sprites(False)
     if flags & FLAG_TEXT:
         glyph = _font(c, font_png)
@@ -276,13 +319,16 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
                                 continue
                             gx, gy = min(px // scale, c.cell - 1), min(py // scale, c.cell - 1)
                             if (gx, gy) in gp:
-                                put(sx, sy, fgc)
+                                put(sx, sy, fgc, 0.6)
                             elif box:
-                                put(sx, sy, bgc)
+                                put(sx, sy, bgc, 0.6)
                 cum += n
             px0, py0, pend = rx, ry, (rx if skip else rx + n * adv)
             off += c.hdr_bytes + (n if skip else (n * cb + 7) // 8)
+    shapes(True)
     sprites(True)
+    if shp:
+        shapes(False, xor=True)
 
     m = R("mono")
     mf, mb = pal(m >> 4), pal(m & 15)
@@ -309,6 +355,13 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
     if bv & 8:
         img = img[::-1]
     return img
+
+
+def _inv_linear(u):
+    """XOR shapes invert the frame buffer, which holds linear colour: 1 - linear, back to sRGB"""
+    lin = u / 12.92 if u <= 0.04045 else ((u + 0.055) / 1.055) ** 2.4
+    lin = 1 - lin
+    return lin * 12.92 if lin <= 0.0031308 else 1.055 * lin ** (1 / 2.4) - 0.055
 
 
 _FONT = {}

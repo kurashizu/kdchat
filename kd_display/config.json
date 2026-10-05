@@ -92,13 +92,19 @@
 
   "registers": ["flags", "gfx_mode", "gfx_x", "gfx_y", "text_x", "text_y", "mono",
                 "gfx_vx", "gfx_vy", "text_vx", "text_vy", "fx", "cycle", "timing", "blink_view", "win_x", "win_y",
-                "pad", "sumG_hi", "sumG_lo", "sumT_hi", "sumT_lo", "sumH_hi", "sumH_lo", "text_wrap_x", "text_wrap_y", "text_move", "text_clip_y0", "text_clip_y1", "screen", "sumI_hi", "sumI_lo", "sumJ_hi", "sumJ_lo", "sumK_hi", "sumK_lo", "show", "size"],
+                "shape_y", "sumG_hi", "sumG_lo", "sumT_hi", "sumT_lo", "sumH_hi", "sumH_lo", "text_wrap_x", "text_wrap_y", "text_move", "text_clip_y0", "text_clip_y1", "screen", "sumI_hi", "sumI_lo", "sumJ_hi", "sumJ_lo", "sumK_hi", "sumK_lo", "show", "size", "shape_x", "shape_vx", "shape_vy"],
   "_registers_doc": "STATE registers (late joiners get them from the refresh like any page): flags 1 on, 2 invert, 4 graphics, 8 text, 16 mono, 32 photo dither, 64 sprites, 128 window | gfx_mode 0 raw 1 photo | gfx_x/gfx_y, text_x/text_y: layer offset in screen pixels (content moves by +offset, wraps; graphics at zoom 1 units) | mono fg<<4|bg | gfx_vx..text_vy: auto-scroll, signed px/s (TIME based: every viewer runs his own clock, the phase differs between viewers) | fx: transition, bits 0-2 effect (0 cut 1 fade 2 wipe right 3 wipe down 4 slide from right 5 slide from bottom 6 dissolve 7 iris), bit 3 hide (else show), bits 4-5 duration (0.25/0.5/1/2 s), bit 6 toggles to replay | cycle: palette cycling start<<4|length | timing: cycle steps/s<<4 | blink frequency in 0.5 Hz steps | blink_view: blink colour<<4 | zoom bits 0-1 (0 x1 1 x2 2 x4) | 4 mirror x | 8 mirror y | win_x / win_y: graphics window x0<<4|x1 in 16 screen px cells (inclusive) | sumG / sumT: 16-bit checksums (sum of the renderer's 16-bit words mod 65536, the two checksum words left out), written by the client once everything else has been sent; every viewer's shader sums its own copy and lights the status LED green when it matches (amber blinking: still arriving) | text_wrap_x / text_wrap_y: wrap period of the moving text in 8 px units (0 = the screen size, the old behaviour; else a glyph leaving one edge re-enters at the other, partly visible on both: smooth marquees of text longer than the screen) | text_move: 0 = every run moves with text_x / text_y and wraps on the whole screen; n > 0 = only runs n-1.. move, the vertical wrap counts from text_clip_y0 and they are clipped to the rows text_clip_y0 .. text_clip_y1 (0 = the bottom); the earlier runs stay put",
 
   "sprites": {
     "_doc": "Hardware sprites, drawn by the text renderer (a renderer of their own would be one more material: PC Good allows 8, used: body 1 + sparkle 1 + display 5). Region = per sprite x, y, attr (3 B), then per sprite colours (2 B: palette index of pixel values 0-3, value 0 = transparent), then patterns (size x size, 2 bpp, rows MSB first). The registers come first, so moving a sprite changes one page. x / y = screen position + 32 (sprites can sit partly outside). attr: 1 visible, 2 flip x, 4 flip y, 8 double size, 16 above the text.",
     "count": 4,
     "size": 16,
+    "offset": 32
+  },
+  "shapes": {
+    "_doc": "Hardware shapes (vector layer, drawn by the text renderer from a shape table: the shader evaluates every shape per pixel, so moving / recolouring one = one page). 10 bytes per shape, 3 per page: b0 kind (low 4 bits: 0 none 1 line 2 rect 3 rrect 4 ellipse 5 arc 6 pie 7 tri 8 poly 9 bezier) | 16 fill | 32 above text | 64 xor (inverts what is under it) | 128 follows the graphics layer (offset + zoom); b1 fill colour << 4 | stroke colour; b2..b7 x0 y0 x1 y1 x2 y2 (screen px + offset; per kind some are raw parameters, see kd/shapes.py); b8 stroke width (bits 0-2) | pattern << 3 (0 solid 1 checker 2 h stripes 3 v stripes 4 diagonal 5 dots 6 h gradient 7 v gradient) | 64 round caps; b9 animation (bits 0-2: 0 none 1 rotate 2 pulse 3 blink 4 sweep) | signed 5-bit speed << 3. The region starts after the clear command's page id (commands.clear_gfx stays 204 for older clients). Registers shape_x / shape_y (layer offset, wraps by each shape's anchor; shape_y sits in the first register page next to text_y, the old pad byte, so a text scroll and a shape scroll arrive in the same frame) and shape_vx / shape_vy (auto-scroll px/s).",
+    "count": 16,
+    "bytes": 10,
     "offset": 32
   },
   "effects": {
@@ -114,7 +120,7 @@
     {"name": "KDisplayG3", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [112, 168], "draws": ["tiles", "status"], "checksum": "sumI"},
     {"name": "KDisplayG4", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [168, 224], "draws": ["tiles", "status"], "checksum": "sumJ"},
     {"name": "KDisplayG5", "regions": ["bitmap", "tilecol", "palette", "regs"], "tiles": [224, 9999], "draws": ["tiles", "status"], "checksum": "sumK"},
-    {"name": "KDisplayT", "regions": ["text", "sprites", "palette", "regs"], "draws": ["sprites", "glyphs", "status"], "checksum": "sumT"}
+    {"name": "KDisplayT", "regions": ["text", "sprites", "shapes", "palette", "regs"], "draws": ["sprites", "shapes", "glyphs", "status"], "checksum": "sumT"}
   ],
 
   "anchor": {
@@ -140,7 +146,8 @@
 
   "commands": {
     "_doc": "Command frames: page ids above the memory pages that DO something on the avatar for a moment (an FX layer state entered while the id is on the wire); the payload is ignored. Allocated from 255 down so they never move when the memory grows (the clear command is pages + 1). Not seen by late joiners: one-shot effects only, states go in registers.",
-    "chime": 255
+    "chime": 255,
+    "clear_gfx": 204
   },
 
   "show": {

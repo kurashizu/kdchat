@@ -70,8 +70,10 @@ class Link:
         self.pal_pages = range(c.pal_base // c.P, (c.pal_base + c.pal_bytes + c.P - 1) // c.P)
         self.reg_pages = range(c.reg_base // c.P, c.reg_base // c.P + c.reg_npages)
         self.spr_head = c.spr_base // c.P                                                     # sprite registers + colours
-        self.spr_pages = range(c.spr_base // c.P, c.pages)
-        first = list(self.pal_pages) + list(self.reg_pages) + [self.spr_head]
+        self.spr_pages = range(c.spr_base // c.P, (c.spr_end + c.P - 1) // c.P)
+        # shapes: small state, sent with the core pages (the hole = the clear command's page id is never memory)
+        self.shp_pages = range(c.shp_base // c.P, c.pages) if c.shp_n else range(0)
+        first = list(self.pal_pages) + list(self.reg_pages) + [self.spr_head] + list(self.shp_pages)
         tc_pages = list(range(c.tc_base // c.P, (c.tc_base + c.tc_bytes + c.P - 1) // c.P))   # tile colours before the
         rest = list(self.text_pages) + tc_pages + list(self.gfx_pages) + list(self.spr_pages)  # bitmap: right colours at once
         self.order = []
@@ -80,7 +82,7 @@ class Link:
                 self.order.append(p)
         self.pos = {p: i for i, p in enumerate(self.order)}
         core = set(first) | set(self.text_pages)
-        self.force = set(range(c.pages))              # unknown avatar state: send every page once
+        self.force = set(self.order)                  # unknown avatar state: send every page once
         if 0 < self.core_share < 1:
             self.groups = {"core": [p for p in self.order if p in core], "rest": [p for p in self.order if p not in core]}
         else:                                         # no split: one cursor over the whole order

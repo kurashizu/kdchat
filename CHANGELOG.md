@@ -3,6 +3,21 @@
 All notable changes to vrc-chatbox. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-05
+
+The Klaude Display now draws its lines with the display's own hardware shapes instead of pixels.
+
+### Changed
+- The rule under the header, the dividers between messages and a new blinking caret after the text you are typing are
+  hardware shapes: the avatar draws them itself. With no picture on the screen no graphics data is sent at all, so the
+  screen is complete sooner for people who just joined, and the dividers scroll together with the text in the same
+  frame.
+- The bundled display library knows the 16 hardware shapes (lines, boxes, rounded boxes, circles / ellipses, arcs,
+  pies, triangles, polygons / stars, curves; fill patterns, XOR, animations) and the web preview draws them.
+
+### Compatibility
+- Works with older versions of the Klaude avatar too (they ignore the shape frames: no rule / dividers there).
+
 ## [1.1.0] - 2026-10-05
 
 A cleaner console: the same features, better organised, on computers and phones.

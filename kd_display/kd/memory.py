@@ -390,6 +390,13 @@ class Memory:
                     v = (v << 2) | (vals[b * 4 + k] & 3)
                 self.buf[base + y * c.spr_row_bytes + b] = v
 
+    # ---------------- shapes
+    def set_shape(self, i, data):
+        """shape slot i <- 10 bytes (kd.shapes.encode), or None = empty"""
+        c = self.cfg
+        a = c.shp_base + i * c.shp_bytes_per
+        self.buf[a:a + c.shp_bytes_per] = data if data is not None else bytes(c.shp_bytes_per)
+
     def page(self, p):
         return self.buf[p * self.cfg.P:(p + 1) * self.cfg.P]
 
