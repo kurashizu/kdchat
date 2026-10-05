@@ -7,12 +7,12 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>VRChat Chatbox</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%B3%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
   <header class="bar">
-    <div class="brand"><span class="logo" aria-hidden="true">🍳</span><b data-i18n="brand"></b></div>
+    <div class="brand"><img class="logo" src="/ui/icon.svg" alt="" width="22" height="22"><b data-i18n="brand"></b></div>
     <div class="outputs" role="group" data-i18n-aria="outputs.aria">
       <button type="button" data-mode="chatbox" data-i18n-title="out.title" aria-pressed="false">
         <span class="ico" aria-hidden="true">🎮</span><span class="lbl" data-i18n="out.chatbox"></span><i class="led" aria-hidden="true"></i></button>
@@ -25,6 +25,13 @@
             aria-haspopup="dialog" aria-controls="sheet"><span aria-hidden="true">⚙︎</span></button>
   </header>
   <div class="offline" id="offline" role="alert" hidden data-i18n="conn.banner"></div>
+  <div class="notice" id="lanNotice" hidden>
+    <span><span aria-hidden="true">ℹ︎</span> <span data-i18n="lan.notice"></span></span>
+    <span class="notice-act">
+      <button type="button" class="btn sm" id="lanSetPw" data-i18n="lan.setPw"></button>
+      <button type="button" class="icon-btn sm" id="lanDismiss" data-i18n-aria="lan.dismiss" data-i18n-title="lan.dismiss"><span aria-hidden="true">✕</span></button>
+    </span>
+  </div>
 
   <main class="grid" id="grid">
     <section class="col">
@@ -54,6 +61,18 @@
         </div>
       </div>
 
+      <section class="card phone-card desk-only" id="phoneCard" hidden>
+        <div class="phone-row">
+          <img class="qr" id="phoneQr" alt="" width="116" height="116">
+          <div class="phone-txt">
+            <h2 data-i18n="lan.title"></h2>
+            <p class="hint" data-i18n="lan.scan"></p>
+            <a class="lan-url" id="phoneUrl" href="#" target="_blank" rel="noopener"></a>
+            <button type="button" class="btn sm ghost" id="phoneHide" data-i18n="lan.hide"></button>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <h2 data-i18n="hist.title"></h2>
         <ul class="history" id="history"></ul>
@@ -77,8 +96,9 @@
   </main>
 
   <footer class="foot">
+    <span>vrc-chatbox <b class="ver"></b></span>
     <a href="/docs" target="_blank" rel="noopener">📖 <span data-i18n="hist.docs"></span></a>
-    <span>POST /api/v1/messages · PUT /api/v1/typing · PUT /api/v1/outputs · /api/v1/kd/*</span>
+    <a href="https://github.com/kurashizu/vrc-chatbox" target="_blank" rel="noopener">GitHub</a>
   </footer>
 
   <!-- settings: a bottom sheet on phones, a side drawer on wide screens -->
@@ -108,10 +128,67 @@
           <button type="button" class="switch-row" id="sEnter" role="switch" aria-checked="false">
             <span class="txt"><b data-i18n="opt.enter"></b><small data-i18n="opt.enterDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
         </section>
+        <section class="sec" id="lanSec">
+          <h3 data-i18n="lan.title"></h3>
+          <p class="hint" id="lanNone" data-i18n="lan.none" hidden></p>
+          <div class="lan-box" id="lanBox" hidden>
+            <img class="qr" id="lanQr" alt="" width="148" height="148">
+            <div class="lan-list" id="lanList"></div>
+          </div>
+          <p class="hint" data-i18n="lan.hint"></p>
+        </section>
+        <section class="sec" id="oscSec">
+          <h3 data-i18n="osc.title"></h3>
+          <p class="hint"><span data-i18n="osc.current"></span> <b id="oscNow">…</b> <span id="oscSrc" class="src"></span></p>
+          <form class="fields" id="oscForm" novalidate>
+            <label class="field grow"><span data-i18n="osc.host"></span>
+              <input id="oscHost" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
+            <label class="field port"><span data-i18n="osc.port"></span>
+              <input id="oscPort" type="number" inputmode="numeric" min="1" max="65535" required></label>
+            <p class="err" id="oscErr" role="alert" hidden></p>
+            <div class="row wrap">
+              <button type="submit" class="btn primary" data-i18n="osc.save"></button>
+              <button type="button" class="btn" id="oscReset" data-i18n="osc.reset"></button>
+            </div>
+          </form>
+          <p class="hint" data-i18n="osc.hint"></p>
+        </section>
         <section class="sec" id="kdSec">
           <h3 data-i18n="sec.kd"></h3>
           <p class="hint" id="kdOffHint" data-i18n="kd.offHint"></p>
           <div id="settings"></div>
+        </section>
+        <section class="sec" id="pwSec">
+          <h3 data-i18n="pw.title"></h3>
+          <p class="hint" id="pwState"></p>
+          <form class="fields" id="pwForm" novalidate>
+            <label class="field grow" id="pwCurWrap"><span data-i18n="pw.current"></span>
+              <input id="pwCur" type="password" autocomplete="current-password"></label>
+            <label class="field grow"><span data-i18n="pw.new"></span>
+              <input id="pwNew" type="password" autocomplete="new-password" minlength="4"></label>
+            <p class="err" id="pwErr" role="alert" hidden></p>
+            <div class="row wrap">
+              <button type="submit" class="btn primary" id="pwSave" data-i18n="pw.set"></button>
+              <button type="button" class="btn danger" id="pwRemove" data-i18n="pw.remove"></button>
+            </div>
+          </form>
+          <p class="hint" data-i18n="pw.hint"></p>
+        </section>
+        <section class="sec" id="srvSec">
+          <h3 data-i18n="srv.title"></h3>
+          <form class="fields" id="srvForm" novalidate>
+            <label class="field grow"><span data-i18n="srv.host"></span>
+              <input id="srvHost" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+            <label class="field port"><span data-i18n="srv.port"></span>
+              <input id="srvPort" type="number" inputmode="numeric" min="1" max="65535"></label>
+            <p class="err" id="srvErr" role="alert" hidden></p>
+            <div class="row wrap">
+              <button type="submit" class="btn" data-i18n="srv.save"></button>
+              <button type="button" class="btn ghost" id="srvReset" data-i18n="osc.reset"></button>
+            </div>
+          </form>
+          <p class="hint" id="srvHint" data-i18n="srv.hint"></p>
+          <p class="hint warn" id="srvRestart" data-i18n="srv.restart" hidden></p>
         </section>
         <section class="sec">
           <h3 data-i18n="sec.more"></h3>
@@ -119,6 +196,7 @@
             <button type="button" class="btn danger" id="clearHist" data-i18n="hist.clear"></button>
             <a class="btn" href="/docs" target="_blank" rel="noopener"><span aria-hidden="true">📖</span><span data-i18n="hist.docs"></span></a>
           </div>
+          <p class="hint about">vrc-chatbox <b class="ver"></b> · <a href="https://github.com/kurashizu/vrc-chatbox" target="_blank" rel="noopener">GitHub</a> · MIT</p>
         </section>
       </div>
     </aside>

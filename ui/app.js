@@ -41,6 +41,7 @@ function setLang(l, remember) {
   paintPlaceholder(); paintOutputs(); paintTargets(); paintStatus(); paintConn();
   if (S.kd) renderSettings();
   if (S.kdStat) paintKdStat();
+  if (S.cfg) paintSettings();
   refreshHistory();
 }
 $("langBtn").onclick = () => setLang(LANG === "zh" ? "en" : "zh", true);
@@ -55,7 +56,10 @@ async function api(path, method = "GET", body, raw) {
   if (!r.ok) {
     let msg = r.status + "";
     try { const j = await r.json(); msg = j.detail || msg; } catch { }
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    if (Array.isArray(msg)) msg = msg.map((d) => d.msg || JSON.stringify(d)).join("; ");   // (validation errors)
+    const err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    err.status = r.status;
+    throw err;
   }
   return r.status === 204 ? null : r.json();
 }
@@ -296,12 +300,16 @@ $("tLive").onclick = () => toggleOpt("live");
 $("tLive").addEventListener("pointerdown", (e) => { if (document.activeElement === text) e.preventDefault(); });
 
 // ---------------------------------------------------------------- settings sheet
-function openSheet() {
+function openSheet(focusId) {
+  loadSettings();
   $("sheet").hidden = false;
   requestAnimationFrame(() => $("sheet").classList.add("open"));
   document.body.classList.add("sheet-open");
   $("openSettings").setAttribute("aria-expanded", "true");
-  setTimeout(() => $("closeSettings").focus({ preventScroll: true }), 50);
+  setTimeout(() => {
+    if (focusId) { $(focusId).scrollIntoView({ block: "start", behavior: "smooth" }); }
+    else $("closeSettings").focus({ preventScroll: true });
+  }, 60);
 }
 function closeSheet() {
   if ($("sheet").hidden) return;
@@ -311,7 +319,7 @@ function closeSheet() {
   setTimeout(() => { $("sheet").hidden = true; }, 220);
   $("openSettings").focus({ preventScroll: true });
 }
-$("openSettings").onclick = openSheet;
+$("openSettings").onclick = () => openSheet();
 $("closeSettings").onclick = closeSheet;
 $("sheetBackdrop").onclick = closeSheet;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sheet").hidden) { e.preventDefault(); closeSheet(); } });
@@ -558,6 +566,130 @@ async function health() {
   paintConn();
 }
 
+// ---------------------------------------------------------------- server settings: phone access, OSC target, password, address
+// S.cfg = GET /settings: {version, osc, server, password, network, warning}
+const qrUrl = (u) => "/api/v1/network/qr.svg?url=" + encodeURIComponent(u);
+const HOST_RE = /^(?=.{1,253}$)(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}|(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?)$/;
+const validHost = (h) => HOST_RE.test(h) && !(/^[\d.]+$/.test(h) && !/^(\d+\.){3}\d+$/.test(h));
+const validPort = (p) => /^\d+$/.test(String(p)) && +p >= 1 && +p <= 65535;
+let lanPick = 0;
+
+async function loadSettings() {
+  try { S.cfg = await api("/settings"); paintSettings(); } catch { }
+}
+
+function fieldErr(id, msg) { const e = $(id); e.textContent = msg || ""; e.hidden = !msg; }
+
+function paintSettings() {
+  const c = S.cfg;
+  if (!c) return;
+  document.querySelectorAll(".ver").forEach((e) => { e.textContent = "v" + c.version; });
+  // phone access
+  const n = c.network, urls = n.urls || [];
+  if (lanPick >= urls.length) lanPick = 0;
+  $("lanNone").hidden = urls.length > 0;
+  $("lanNone").textContent = t("lan.none", { host: n.listen_host });
+  $("lanBox").hidden = !urls.length;
+  const list = $("lanList"); list.innerHTML = "";
+  if (urls.length) {
+    list.appendChild(el("p", "hint", t("lan.scan")));
+    urls.forEach((u, i) => {
+      const b = el("button", "lan-url" + (i === lanPick ? " on" : ""), u.replace(/\/$/, ""));
+      b.type = "button"; b.setAttribute("aria-pressed", i === lanPick);
+      b.onclick = () => { lanPick = i; paintSettings(); };
+      list.appendChild(b);
+    });
+    const u = urls[lanPick];
+    if ($("lanQr").dataset.url !== u) { $("lanQr").src = qrUrl(u); $("lanQr").dataset.url = u; }
+    $("lanQr").alt = t("lan.qrAlt", { url: u });
+  }
+  // the desktop card + the "open on the LAN" notice
+  $("phoneCard").hidden = !urls.length || store.get("phoneHidden", false);
+  if (urls.length) {
+    if ($("phoneQr").dataset.url !== urls[0]) { $("phoneQr").src = qrUrl(urls[0]); $("phoneQr").dataset.url = urls[0]; }
+    $("phoneQr").alt = t("lan.qrAlt", { url: urls[0] });
+    $("phoneUrl").href = urls[0]; $("phoneUrl").textContent = urls[0].replace(/\/$/, "");
+  }
+  $("lanNotice").hidden = !n.open_on_lan || store.get("lanNoticeOff", false);
+  // OSC target
+  const o = c.osc;
+  $("oscNow").textContent = `${o.host}:${o.port}`;
+  $("oscSrc").textContent = t("osc.src." + (o.source || "default"));
+  if (document.activeElement !== $("oscHost") && document.activeElement !== $("oscPort")) {
+    $("oscHost").value = o.host; $("oscPort").value = o.port;
+  }
+  $("oscReset").title = `${o.default.host}:${o.default.port}`;
+  if (o.error) fieldErr("oscErr", t("osc.unresolved", { msg: o.error })); 
+  // password
+  const pw = c.password;
+  $("pwState").textContent = t(!pw.enabled ? "pw.off" : pw.source === "env" ? "pw.onEnv" : "pw.onSettings");
+  $("pwCurWrap").hidden = !pw.enabled;
+  $("pwRemove").hidden = !pw.enabled;
+  $("pwSave").textContent = t(pw.enabled ? "pw.change" : "pw.set");
+  // server address
+  const sv = c.server;
+  if (!$("srvForm").contains(document.activeElement)) { $("srvHost").value = sv.listen_host; $("srvPort").value = sv.listen_port; }
+  $("srvRestart").hidden = !sv.restart_needed;
+}
+
+$("oscForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const host = $("oscHost").value.trim(), port = $("oscPort").value.trim();
+  if (!validHost(host)) return fieldErr("oscErr", t("osc.badHost"));
+  if (!validPort(port)) return fieldErr("oscErr", t("osc.badPort"));
+  fieldErr("oscErr");
+  try {
+    S.cfg.osc = await api("/osc", "PUT", { host, port: Number(port) });
+    paintSettings(); health(); toast(t("osc.saved", { target: `${host}:${port}` }));
+  } catch (err) { fieldErr("oscErr", err.status === 400 ? err.message : t("toast.failed", { msg: err.message })); }
+};
+$("oscReset").onclick = async () => {
+  fieldErr("oscErr");
+  try {
+    S.cfg.osc = await api("/osc", "DELETE");
+    $("oscHost").value = S.cfg.osc.host; $("oscPort").value = S.cfg.osc.port;
+    paintSettings(); health(); toast(t("osc.resetDone", { target: `${S.cfg.osc.host}:${S.cfg.osc.port}` }));
+  } catch (err) { fieldErr("oscErr", t("toast.failed", { msg: err.message })); }
+};
+
+$("pwForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const nw = $("pwNew").value;
+  if (nw.length < 4) return fieldErr("pwErr", t("pw.short"));
+  fieldErr("pwErr");
+  try {
+    await api("/settings/password", "PUT", { current_password: $("pwCur").value || null, new_password: nw });
+    $("pwCur").value = $("pwNew").value = "";
+    toast(t("pw.setDone"));
+    setTimeout(() => location.reload(), 1500);              // the browser asks for the new password
+  } catch (err) { fieldErr("pwErr", err.status === 403 ? t("pw.wrong") : err.message); }
+};
+$("pwRemove").onclick = async () => {
+  if (!confirm(t("pw.confirmRemove"))) return;
+  try {
+    S.cfg.password = await api("/settings/password", "PUT", { current_password: $("pwCur").value || null, new_password: null });
+    $("pwCur").value = ""; fieldErr("pwErr"); toast(t("pw.removed")); loadSettings();
+  } catch (err) { fieldErr("pwErr", err.status === 403 ? t("pw.wrong") : err.message); }
+};
+
+$("srvForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const host = $("srvHost").value.trim(), port = $("srvPort").value.trim();
+  if (!validHost(host)) return fieldErr("srvErr", t("srv.badHost"));
+  if (!validPort(port)) return fieldErr("srvErr", t("osc.badPort"));
+  fieldErr("srvErr");
+  try { S.cfg.server = await api("/settings/server", "PUT", { listen_host: host, listen_port: Number(port) }); paintSettings(); toast(t("srv.saved")); }
+  catch (err) { fieldErr("srvErr", err.message); }
+};
+$("srvReset").onclick = async () => {
+  try { S.cfg.server = await api("/settings/server", "DELETE"); $("srvHost").value = ""; paintSettings(); toast(t("srv.saved")); }
+  catch (err) { fieldErr("srvErr", err.message); }
+};
+
+$("lanSetPw").onclick = () => { openSheet("pwSec"); setTimeout(() => $("pwNew").focus({ preventScroll: true }), 400); };
+$("lanDismiss").onclick = () => { store.set("lanNoticeOff", true); $("lanNotice").hidden = true; };
+$("phoneHide").onclick = () => { store.set("phoneHidden", true); $("phoneCard").hidden = true; };
+
 // ---------------------------------------------------------------- phones: keyboard and the fixed composer
 // Android Chrome shrinks the page for the keyboard (viewport interactive-widget=resizes-content); iOS Safari and older
 // browsers do not: there the visual viewport tells how much of the window the keyboard covers, and the composer moves up.
@@ -586,7 +718,7 @@ matchMedia("(max-width: 720px)").addEventListener("change", () => { paintPlaceho
   updateCount();
   layoutViewport();
   await setOutputs(null);
-  health();
+  health(); loadSettings();
   setInterval(() => refreshKd(false), 1000);
   setInterval(health, 10000);
   setInterval(refreshHistory, 15000);
