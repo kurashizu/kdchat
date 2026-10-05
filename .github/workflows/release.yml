@@ -1,0 +1,91 @@
+name: Release
+
+# Push a tag like v1.0.0 -> tests, Windows .exe, GitHub Release with the .exe attached.
+# "Run workflow" by hand (workflow_dispatch) builds the .exe as a downloadable artifact only (no release).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      - run: node tests/js_check.mjs
+      - name: The tag matches version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v=$(uv run python -c "from version import __version__; print(__version__)")
+          test "v$v" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != version.py $v"; exit 1; }
+
+  windows-exe:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: "Install (with the build group: PyInstaller, pywebview)"
+        run: uv sync --locked --group build
+      - name: Build the .exe
+        run: uv run pyinstaller packaging/vrc-chatbox.spec --noconfirm --clean
+      - name: Smoke test (server only)
+        shell: pwsh
+        run: |
+          $env:VCB_DATA_DIR = "$env:RUNNER_TEMP\vcb-data"
+          $p = Start-Process -FilePath dist\vrc-chatbox.exe -ArgumentList "--no-window","--host","127.0.0.1","--port","5599" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try { $r = Invoke-RestMethod http://127.0.0.1:5599/api/v1/health; $ok = $r.version -ne $null } catch { }
+          }
+          try {
+            if (-not $ok) { throw "the server did not answer" }
+            Invoke-RestMethod -Method Put -ContentType application/json -Body '{"kd":true}' http://127.0.0.1:5599/api/v1/outputs | Out-Null
+            Invoke-RestMethod -Method Post -ContentType application/json -Body '{"text":"smoke test"}' http://127.0.0.1:5599/api/v1/messages | Out-Null
+            Start-Sleep -Seconds 2
+            $s = Invoke-RestMethod http://127.0.0.1:5599/api/v1/kd/status
+            if ($s.frames_sent -lt 1) { throw "the Klaude display sent nothing" }
+            Invoke-WebRequest http://127.0.0.1:5599/ -UseBasicParsing | Out-Null
+            Invoke-WebRequest "http://127.0.0.1:5599/api/v1/network/qr.svg?url=http://x/" -UseBasicParsing | Out-Null
+          } finally { Stop-Process -Id $p.Id -Force }
+      - name: Name it
+        id: name
+        shell: bash
+        run: |
+          v=$(uv run python -c "from version import __version__; print(__version__)")
+          f="vrc-chatbox-${v}-windows-x64.exe"
+          mv dist/vrc-chatbox.exe "dist/$f"
+          (cd dist && sha256sum "$f" > "$f.sha256")
+          echo "file=$f" >> "$GITHUB_OUTPUT"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.file }}
+          path: dist/vrc-chatbox-*
+      - name: Release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          awk -v v="${{ steps.name.outputs.version }}" '
+            /^## \[/ { if (on) exit; if (index($0, "[" v "]")) { on = 1; next } }
+            on' CHANGELOG.md > notes.md
+          cat >> notes.md <<'EOT'
+
+          **Windows:** download `vrc-chatbox-*-windows-x64.exe` below and run it. Windows SmartScreen may say
+          "Windows protected your PC" (the app is not code-signed): click **More info -> Run anyway**.
+          EOT
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: |
+            dist/vrc-chatbox-*.exe
+            dist/vrc-chatbox-*.exe.sha256
