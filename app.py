@@ -872,7 +872,7 @@ app.include_router(api)
 
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
-UI_FILES = {"app.js": "application/javascript", "app.css": "text/css"}
+UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascript", "app.css": "text/css"}
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False, dependencies=[AuthDep])
