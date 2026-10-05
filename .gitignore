@@ -18,3 +18,8 @@ backup-*.tgz
 *.bak-*
 ._*
 .DS_Store
+
+# settings saved by the console (may hold a password hash)
+settings.json
+settings.json.bad
+*.tmp

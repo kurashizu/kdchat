@@ -1,63 +1,49 @@
-"""VRChat 远程 chatbox 发送服务（带煎蛋认证 + RESTful API）。
+"""vrc-chatbox: send messages to the VRChat chatbox from a phone or any browser.
 
-通过 RESTful API 把请求转成 OSC 消息，发到 VRChat 的 chatbox（默认 127.0.0.1:9000，见 VRC_HOST）。
-OSC 协议细节见 https://docs.vrchat.com/docs/osc-as-input-controller
+A small web server (FastAPI): a web console at / and a REST API at /api/v1 that turn requests into OSC messages for
+VRChat's chatbox (/chatbox/input, /chatbox/typing). It can also drive the Klaude avatar's pixel display (the "kd"
+output, see kd_chat.py). OSC details: https://docs.vrchat.com/docs/osc-as-input-controller
 
-🍳 煎蛋认证
-    方式:   HTTP Basic（用户名任意）
-    密码:   环境变量 AUTH_PASSWORD（或同目录 .env 文件），必须设置
-    Realm:  煎蛋认证
+Configuration: see vcb_config.py (settings file > environment / .env > defaults). The login (HTTP Basic, any user
+name) is only required when a password is configured.
+
+Run:  uv run python app.py            (or: uv run uvicorn app:app --host 0.0.0.0 --port 5555)
 """
 
 from __future__ import annotations
 
+import argparse
+import errno
 import hmac
+import json
 import logging
 import os
 import socket
+import sys
 import threading
+import time
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Query,
-    Request,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 from pythonosc.udp_client import SimpleUDPClient
-from fastapi.responses import Response
 
-import json
+import netinfo
+import vcb_config as cfg
+from version import __version__
 
+cfg.load_dotenv(os.path.join(cfg.data_dir(), ".env"))
 
-def _load_dotenv(path: str) -> None:
-    """同目录的 .env（KEY=VALUE 每行一个，# 注释）：只补没设置的环境变量。不进 git，放密码和本机地址。"""
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-    except FileNotFoundError:
-        pass
-
-
-_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-# the Klaude display driver sends to the same VRChat as the chatbox unless KD_OSC_HOST says otherwise
-if os.getenv("VRC_HOST"):
-    os.environ.setdefault("KD_OSC_HOST", os.environ["VRC_HOST"])
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("vrc-chatbox")
 
 try:                                   # Klaude display output (./kd_chat.py + ./kd_display); optional
     import kd_chat
@@ -67,87 +53,112 @@ except Exception as _e:                # noqa: BLE001
     _KD_IMPORT_ERROR = repr(_e)
 
 
-# ==================== 配置 ====================
+# ==================== configuration ====================
 
-VRC_HOST = os.getenv("VRC_HOST", "127.0.0.1")
-VRC_PORT = int(os.getenv("VRC_PORT", "9000"))
-LISTEN_HOST = os.getenv("LISTEN_HOST", "0.0.0.0")
-LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
+SETTINGS_FILE = os.getenv("SETTINGS_FILE") or os.path.join(cfg.data_dir(), "settings.json")
+STATE_FILE = os.getenv("STATE_FILE") or os.path.join(cfg.data_dir(), "state.json")   # outputs + display options
+SETTINGS = cfg.Settings(SETTINGS_FILE)
 
-# 煎蛋认证
-AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
-if not AUTH_PASSWORD:
-    raise SystemExit("AUTH_PASSWORD 未设置：在环境变量或同目录的 .env 里设置密码（见 .env.example）")
-AUTH_REALM = "煎蛋认证"          # 品牌名 / UI 显示 / 日志
-WWW_AUTH_REALM = "Chatbox"       # WWW-Authenticate header 的 realm（必须 ASCII，否则 Starlette latin-1 报错）
-
-# 输出模式：chatbox = 游戏自带聊天框（/chatbox/input），kd = Klaude 头顶显示屏（kd 驱动，OSC 参数）
-STATE_FILE = os.getenv("STATE_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json"))
-KD_DRY = os.getenv("KD_DRY", "") not in ("", "0", "false")      # 测试用：kd 只编码不发送
+KD_DRY = os.getenv("KD_DRY", "") not in ("", "0", "false")      # testing: the display encodes but sends nothing
+ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+WWW_AUTH_REALM = "vrc-chatbox"   # (must be ASCII)
 MODES = ("chatbox", "kd")
 
-# VRChat chatbox 限制
+# VRChat chatbox limits
 MAX_CHARS = 144
 MAX_LINES = 9
-KD_MAX_CHARS = 400        # Klaude 显示屏：可以比游戏聊天框长（单条模式会跑马灯）
+KD_MAX_CHARS = 400        # the Klaude display can take longer messages (the single layout scrolls them)
 KD_MAX_LINES = 20
-HISTORY_MAX = 50  # 服务端消息历史保留条数
+HISTORY_MAX = 50          # messages kept in the server's history (memory only)
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-log = logging.getLogger("vrc-chatbox")
+RUNTIME: dict = {"listen_host": None, "listen_port": None}     # what main() / the desktop app actually bound
+_server_at_start: dict = {}                                     # the configured address when the server started
+SESSION_TOKEN: Optional[str] = None     # set by the desktop app: its own window gets in without the password
+SESSION_COOKIE = "vcb_session"
+UI_DIR = os.path.join(cfg.app_dir(), "ui")
+UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascript", "app.css": "text/css",
+            "icon.svg": "image/svg+xml"}
 
 
-# ==================== FastAPI 应用 ====================
+# ==================== FastAPI app ====================
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    _startup()
+    yield
+    log.info("vrc-chatbox stopped")
+
 
 app = FastAPI(
-    title="VRChat Chatbox Bridge",
+    lifespan=_lifespan,
+    title="vrc-chatbox",
     description=(
-        "把 HTTP 请求转成 OSC 消息，发到 VRChat 的 chatbox。\n\n"
-        "🔒 **需要煎蛋认证**：用户名任意，密码是环境变量 `AUTH_PASSWORD`"
-        "（或同目录 `.env`）里设置的值。\n\n"
-        "📖 公开文档: [/docs](/docs)（无需认证）\n"
-        "🧪 Swagger UI: [/swagger](/swagger)"
+        "Send messages to the VRChat chatbox (OSC) over HTTP.\n\n"
+        "🔒 When a password is configured every request needs HTTP Basic auth (any user name, the password).\n\n"
+        "📖 Overview: [/docs](/docs) · 🧪 Swagger UI: [/swagger](/swagger)"
     ),
-    version="2.0.0",
-    # 默认 /docs 被自定义文档占用，Swagger UI 挪到这里
-    docs_url="/swagger",
+    version=__version__,
+    docs_url="/swagger",                # /docs is the readable overview page below
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     openapi_tags=[
-        {"name": "meta", "description": "元信息 / 配置 / 健康检查"},
-        {"name": "messages", "description": "chatbox 消息（发送 + 历史）"},
-        {"name": "typing", "description": "typing 指示器状态"},
+        {"name": "meta", "description": "Version, configuration, health"},
+        {"name": "messages", "description": "Chatbox messages (send, live typing, edit, history)"},
+        {"name": "typing", "description": "The typing indicator"},
+        {"name": "mode", "description": "Outputs: the game chatbox and the Klaude display"},
+        {"name": "settings", "description": "OSC target, server address, password, LAN address"},
+        {"name": "kd", "description": "The Klaude display (only with the Klaude avatar)"},
     ],
 )
 
-# 方便同源 / 任意前端直接调。
-# 注：如果别的 origin 想带凭证调本 API，需要把 origin 加进 allow_origins
-# （浏览器规范不允许 "*" + credentials 同时存在）。
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if ALLOWED_ORIGINS:                      # other web front ends that may call the API (cross-origin)
+    app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"],
+                       allow_credentials=True)
 
 
-# ==================== 单例状态 ====================
+@app.middleware("http")
+async def _same_origin_only(request: Request, call_next):
+    """Refuse state-changing requests from other web sites (a page you visit must not be able to post to the
+    console on your machine). Same origin, origins in ALLOWED_ORIGINS and non-browser clients (no Origin) pass."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin is not None:
+            netloc = urlparse(origin).netloc
+            hosts = {request.headers.get("host", ""), request.headers.get("x-forwarded-host", "")}
+            if origin == "null" or (netloc not in hosts and origin.rstrip("/") not in ALLOWED_ORIGINS):
+                log.warning("refused a cross-origin %s %s from %s", request.method, request.url.path, origin)
+                return JSONResponse({"detail": "Cross-origin request refused (see ALLOWED_ORIGINS)."}, status_code=403)
+    return await call_next(request)
+
+
+@app.exception_handler(Exception)
+async def _unexpected(request: Request, exc: Exception):
+    """no stack traces for users: log it, answer with a short message"""
+    log.exception("unexpected error in %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": f"Internal error: {type(exc).__name__}. See the server log."}, status_code=500)
+
+
+# ==================== state ====================
 
 _client: Optional[SimpleUDPClient] = None
+_osc = {"host": None, "port": None, "ip": None, "error": None}     # the OSC target in use
+_osc_lock = threading.Lock()
 _typing_state: bool = False
-_outputs: dict = {"chatbox": True, "kd": False}   # 两个输出各自开关，可以同时打开
-_kd = None                      # kd_chat.KdChat，启动时创建
+_outputs: dict = {"chatbox": True, "kd": False}   # both outputs can be on at the same time
+_kd = None                      # kd_chat.KdChat, created at startup
 _state_lock = threading.Lock()
 
 
 def _load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:            # noqa: BLE001
+            st = json.load(f)
+        return st if isinstance(st, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        log.warning("state file %s is unreadable (%s); starting with the defaults", STATE_FILE, e)
         return {}
 
 
@@ -155,18 +166,66 @@ def _save_state() -> None:
     with _state_lock:
         data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {})}
         tmp = STATE_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE_FILE)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, STATE_FILE)
+        except OSError as e:
+            log.warning("could not save %s: %s", STATE_FILE, e)
 
 
-# ==================== 输出后端 ====================
-# 两种输出共用同一个 VRChat OSC 目标（VRC_HOST:VRC_PORT）。消息和 typing 发到所有打开的输出。
+# ==================== the OSC target ====================
+
+
+def _resolve_ipv4(host: str, port: int) -> str:
+    return socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+
+
+def _apply_osc_target(host: str, port: int) -> None:
+    """(re)point the chatbox client and the Klaude display at host:port. Raises OSError if host does not resolve."""
+    ip = _resolve_ipv4(host, port)
+    global _client
+    with _osc_lock:
+        _client = SimpleUDPClient(ip, port)
+        _osc.update(host=host, port=port, ip=ip, error=None)
+        if _kd is not None and getattr(_kd.d, "sender", None) is not None:
+            _kd.d.sender.addr = (ip, port)          # kd_display's Sender: the next frame goes to the new target
+            _kd.d.target = (ip, port)
+    log.info("OSC target -> udp://%s:%d%s", host, port, f" ({ip})" if ip != host else "")
+
+
+def _osc_target_init() -> None:
+    host, port = SETTINGS.value("osc_host"), SETTINGS.value("osc_port")
+    try:
+        _apply_osc_target(host, port)
+    except OSError as e:
+        global _client
+        with _osc_lock:
+            _client = None
+            _osc.update(host=host, port=port, ip=None, error=str(e))
+        log.error("OSC target %s:%d does not resolve (%s): messages cannot be sent until it is fixed in Settings",
+                  host, port, e)
+
+
+def _osc_send(address: str, args: list) -> None:
+    with _osc_lock:
+        client, host, port, err = _client, _osc["host"], _osc["port"], _osc["error"]
+    if client is None:
+        raise HTTPException(status_code=502, detail=f"VRChat host {host} cannot be resolved ({err}). Fix the OSC "
+                                                    f"target in Settings.")
+    try:
+        client.send_message(address, args)
+    except OSError as e:
+        log.warning("OSC send to %s:%s failed: %s", host, port, e)
+        raise HTTPException(status_code=502, detail=f"Could not send to VRChat at {host}:{port}: {e.strerror or e}")
+
+
+# ==================== outputs ====================
+# Both outputs use the same VRChat OSC target. Messages and typing go to every output that is on.
 
 
 def _chatbox_send(text: str, immediate: bool, sfx: bool) -> None:
-    assert _client is not None
-    _client.send_message("/chatbox/input", [text, bool(immediate), bool(sfx)])
+    _osc_send("/chatbox/input", [text, bool(immediate), bool(sfx)])
 
 
 _cb_typing = False             # what the game's typing indicator was last set to
@@ -174,9 +233,8 @@ _cb_typing = False             # what the game's typing indicator was last set t
 
 def _chatbox_typing(on: bool) -> None:
     global _cb_typing
-    assert _client is not None
     _cb_typing = bool(on)
-    _client.send_message("/chatbox/typing", [bool(on)])
+    _osc_send("/chatbox/typing", [bool(on)])
 
 
 def _chatbox_live(text: str) -> None:
@@ -187,13 +245,17 @@ def _chatbox_live(text: str) -> None:
 
 
 def _set_outputs(chatbox: Optional[bool] = None, kd: Optional[bool] = None) -> None:
-    """打开 / 关闭输出。kd 打开时显示屏出场（开始发送和补发），关闭时退场，发完后停止发送。"""
+    """Turn outputs on / off. The display appears when kd is switched on (and starts sending), leaves when it is
+    switched off and stops sending afterwards."""
     if kd and _kd is None:
-        raise HTTPException(status_code=503, detail=f"kd 输出不可用: {_KD_IMPORT_ERROR}")
+        raise HTTPException(status_code=503, detail=f"The Klaude display output is not available: {_KD_IMPORT_ERROR}")
     if chatbox is not None and bool(chatbox) != _outputs["chatbox"]:
         _outputs["chatbox"] = bool(chatbox)
         if _typing_state:
-            _chatbox_typing(_outputs["chatbox"])      # 正在输入的指示器跟着输出走
+            try:
+                _chatbox_typing(_outputs["chatbox"])      # the typing indicator follows the output
+            except HTTPException:
+                pass
     if kd is not None and bool(kd) != _outputs["kd"]:
         _outputs["kd"] = bool(kd)
         if _kd is not None:
@@ -212,150 +274,145 @@ _next_id = 0
 _id_lock = threading.Lock()
 
 
-@app.on_event("startup")
+def _listen() -> tuple[str, int]:
+    """the address the server listens on (what main() bound, else the configured one)"""
+    return (RUNTIME["listen_host"] or SETTINGS.value("listen_host"), RUNTIME["listen_port"] or SETTINGS.value("listen_port"))
+
+
 def _startup() -> None:
-    global _client
-    _client = SimpleUDPClient(VRC_HOST, VRC_PORT)
     global _kd
+    _server_at_start.update(listen_host=SETTINGS.value("listen_host"), listen_port=SETTINGS.value("listen_port"))
+    if SETTINGS.warning:
+        log.warning(SETTINGS.warning)
     st = _load_state()
+    host, port = SETTINGS.value("osc_host"), SETTINGS.value("osc_port")
     if kd_chat is not None:
         try:
-            _kd = kd_chat.KdChat(VRC_HOST, VRC_PORT, dry=KD_DRY, settings=st.get("kd"))
+            try:
+                ip = _resolve_ipv4(host, port)
+            except OSError:
+                ip = "127.0.0.1"                          # fixed later in Settings (_apply_osc_target)
+            _kd = kd_chat.KdChat(ip, port, dry=KD_DRY, settings=st.get("kd"))
         except Exception as e:     # noqa: BLE001
-            log.error("kd 输出初始化失败: %r", e)
+            log.error("Klaude display output failed to start: %r", e)
     else:
-        log.warning("kd 输出不可用: %s", _KD_IMPORT_ERROR)
+        log.warning("Klaude display output not available: %s", _KD_IMPORT_ERROR)
+    _osc_target_init()
     if isinstance(st.get("outputs"), dict):
         _outputs.update({k: bool(v) for k, v in st["outputs"].items() if k in _outputs})
-    elif st.get("mode") == "kd":                       # 旧的单选模式：kd 打开，游戏聊天框也一起打开
+    elif st.get("mode") == "kd":                       # the old single-choice mode: kd on, chatbox on too
         _outputs.update(chatbox=True, kd=True)
     if _kd is None:
         _outputs["kd"] = False
     if _kd is not None:
         _kd.set_active(_outputs["kd"])
-    log.info("输出: %s%s", _outputs_label(), " (kd dry)" if KD_DRY else "")
-    pw_hint = (
-        AUTH_PASSWORD[:2] + "*" * (len(AUTH_PASSWORD) - 2)
-        if len(AUTH_PASSWORD) >= 2 else "***"
-    )
-    log.info("OSC target → udp://%s:%d", VRC_HOST, VRC_PORT)
-    log.info("🍳 煎蛋认证已启用 (realm=%s, password=%s)", AUTH_REALM, pw_hint)
+    lh, lp = _listen()
+    urls = netinfo.urls(lh, lp)
+    log.info("vrc-chatbox %s | OSC -> udp://%s:%s (%s) | outputs: %s%s | login: %s", __version__, host, port,
+             SETTINGS.get("osc_host")[1], _outputs_label(), " (kd dry run)" if KD_DRY else "",
+             f"password ({SETTINGS.auth_source()})" if SETTINGS.auth_enabled() else "none")
+    log.info("console: http://127.0.0.1:%d/%s", lp, "".join(f"  ·  {u}" for u in urls))
+    if not SETTINGS.auth_enabled() and lh in ("0.0.0.0", "", "::"):
+        log.info("no password set: everyone on your network can use the console (set one in Settings)")
 
 
-# ==================== 煎蛋认证 ====================
+# ==================== login (only when a password is configured) ====================
 
 security = HTTPBasic(auto_error=False, realm=WWW_AUTH_REALM)
 
 
-def require_auth(
-    creds: Optional[HTTPBasicCredentials] = Depends(security),
-) -> str:
-    """煎蛋认证：用户名任意，密码必须匹配 AUTH_PASSWORD。
-
-    使用 hmac.compare_digest 做恒定时间比较，防止计时攻击。
-    """
-    if creds is None:
-        log.warning("煎蛋认证失败: 缺少 Authorization 头")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=(
-                "🍳 煎蛋认证失败：缺少凭证。"
-                "试试 Authorization: Basic base64(user:<密码>)"
-            ),
-            headers={"WWW-Authenticate": f'Basic realm="{WWW_AUTH_REALM}"'},
-        )
-    expected = AUTH_PASSWORD.encode("utf-8")
-    provided = creds.password.encode("utf-8") if creds.password else b""
-    if not hmac.compare_digest(provided, expected):
-        log.warning(
-            "煎蛋认证失败: 密码错误 (user=%s)",
-            creds.username or "<empty>",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="🍳 煎蛋认证失败：密码错误（煎糊了）",
-            headers={"WWW-Authenticate": f'Basic realm="{WWW_AUTH_REALM}"'},
-        )
-    return creds.username or "ikun"
+def _session_ok(request: Request) -> bool:
+    tok = request.cookies.get(SESSION_COOKIE)
+    return bool(SESSION_TOKEN and tok and hmac.compare_digest(tok, SESSION_TOKEN))
 
 
-# 通用认证依赖（路由器级 + 函数级复用，FastAPI 同请求内会自动缓存）
+def require_auth(request: Request, creds: Optional[HTTPBasicCredentials] = Depends(security)) -> str:
+    """No password configured: everyone may. Otherwise HTTP Basic (any user name + the password), or the desktop
+    app's own window (session cookie)."""
+    if not SETTINGS.auth_enabled():
+        return "-"
+    if _session_ok(request):
+        return "app"
+    if creds is not None and SETTINGS.check_password(creds.password or ""):
+        return creds.username or "-"
+    if creds is not None:
+        log.warning("login failed (wrong password) from %s", request.client.host if request.client else "?")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Password required (HTTP Basic: any user name, the password)." if creds is None else "Wrong password.",
+        headers={"WWW-Authenticate": f'Basic realm="{WWW_AUTH_REALM}"'},
+    )
+
+
 AuthDep = Depends(require_auth)
 
 
-# ==================== Pydantic 模型 ====================
+# ==================== models ====================
 
 
 class MessageCreate(BaseModel):
-    """发送 chatbox 消息的请求体。"""
-    text: str = Field(..., description="要发送的 chatbox 文本（最长 144 字符、最多 9 行）")
-    immediate: bool = Field(
-        True,
-        description="True=立即发送，False=只填进键盘（不发送）",
-    )
-    sfx: bool = Field(
-        True,
-        description="是否播放通知音效（immediate=True 时才有意义）",
-    )
-    live: bool = Field(
-        False,
-        description="自动发送（边打边发）的更新：kd 模式下原地更新正在打的那条，不新增一条（游戏聊天框忽略）",
-    )
-    final: bool = Field(True, description="False = 还在打（实时显示，之后用 PATCH 更新 / 定稿，DELETE 放弃）")
+    """A new chatbox message."""
+    text: str = Field(..., description="The text (game chatbox: at most 144 characters and 9 lines)")
+    immediate: bool = Field(True, description="True = send it; False = only put it into the game's keyboard")
+    sfx: bool = Field(True, description="Play the notification sound (only with immediate=True)")
+    live: bool = Field(False, description="(old) a live-typing update: same as final=false")
+    final: bool = Field(True, description="False = still being typed (shown live; later PATCH to update / finish "
+                                          "it, DELETE to drop it)")
     targets: Optional[list[str]] = Field(
         None,
-        description="这条发到哪些输出（chatbox / kd），只在打开的输出里选；不填 = 所有打开的输出。"
-                    "比如显示屏正在显示图片时只发 [\"chatbox\"]，图片不受影响",
+        description='Which outputs this message goes to ("chatbox", "kd"), among the ones that are on; '
+                    'empty = all that are on. E.g. only ["chatbox"] while the display shows a picture.',
     )
 
 
 class MessageItem(BaseModel):
-    """已发送消息资源。"""
-    id: int = Field(..., description="消息自增 ID")
+    """A sent message."""
+    id: int = Field(..., description="Message id")
     text: str
     immediate: bool
     sfx: bool
-    output: str = Field("chatbox", description="发到哪里：chatbox / kd / chatbox+kd")
-    created_at: str = Field(..., description="ISO 8601 UTC 时间戳")
+    output: str = Field("chatbox", description="Where it went: chatbox / kd / chatbox+kd")
+    created_at: str = Field(..., description="ISO 8601 UTC time")
     length: int
-    edited: bool = Field(False, description="发出后改过（显示屏上显示 edited）")
-    reverted: bool = Field(False, description="已撤回（显示屏上显示 message reverted）")
-    kd_id: Optional[int] = Field(None, description="它在 Klaude 显示屏上的编号（只有发到显示屏的消息有）")
-    final: bool = Field(True, description="False = 还在打")
-    targets: list[str] = Field(default_factory=list, description="发到了哪些输出")
+    edited: bool = Field(False, description="Changed after it was sent (the display shows 'edited')")
+    reverted: bool = Field(False, description="Reverted (the display shows 'message reverted')")
+    kd_id: Optional[int] = Field(None, description="Its number on the Klaude display (display messages only)")
+    final: bool = Field(True, description="False = still being typed")
+    targets: list[str] = Field(default_factory=list, description="The outputs it went to")
 
 
 class MessageEdit(BaseModel):
-    """修改消息：还在打的更新内容 / 定稿；已发出的编辑（显示 edited）。"""
-    text: str = Field(..., description="新的内容")
-    final: bool = Field(True, description="False = 编辑还在进行（实时显示），True = 定稿")
-    cancel: bool = Field(False, description="放弃编辑：恢复成这段文字，不标 edited")
+    """Change a message: update / finish one still being typed, or edit a sent one (shown as edited)."""
+    text: str = Field(..., description="The new text")
+    final: bool = Field(True, description="False = the edit is still going on (shown live), True = done")
+    cancel: bool = Field(False, description="Give the edit up: back to this text, not marked as edited")
 
 
 class MessageList(BaseModel):
-    """消息列表（分页）。"""
+    """A page of the message history."""
     items: list[MessageItem]
-    total: int = Field(..., description="服务端消息总数")
+    total: int = Field(..., description="Messages in the history")
     limit: int
     offset: int
 
 
 class ModeState(BaseModel):
-    """输出模式。"""
-    mode: str = Field(..., description="chatbox = 游戏自带聊天框；kd = Klaude 头顶显示屏")
-    max_chars: int = Field(0, description="这个模式下一条消息最多几个字符（只读）")
-    max_lines: int = Field(0, description="最多几行（只读）")
+    """(old) output mode."""
+    mode: str = Field(..., description="chatbox = the game chatbox; kd = the Klaude display")
+    max_chars: int = Field(0, description="Longest message in this mode (read only)")
+    max_lines: int = Field(0, description="Most lines (read only)")
 
 
 class TypingState(BaseModel):
-    """typing 状态。"""
-    typing: bool = Field(..., description="是否显示'正在输入'指示器")
-    targets: Optional[list[str]] = Field(None, description="显示在哪些输出上（不填 = 所有打开的输出）")
+    """The typing indicator."""
+    typing: bool = Field(..., description="Show the 'typing…' indicator")
+    targets: Optional[list[str]] = Field(None, description="Which outputs show it (empty = all that are on)")
 
 
 class HealthResponse(BaseModel):
-    """健康检查响应。"""
+    """Health check."""
     ok: bool
+    version: str = __version__
     vrc_host: str
     vrc_port: int
     max_chars: int
@@ -365,7 +422,8 @@ class HealthResponse(BaseModel):
 
 
 class ConfigResponse(BaseModel):
-    """运行时配置。"""
+    """Runtime configuration."""
+    version: str = __version__
     vrc_host: str
     vrc_port: int
     listen_host: str
@@ -378,7 +436,7 @@ class ConfigResponse(BaseModel):
 
 
 class InfoResponse(BaseModel):
-    """服务元信息。"""
+    """About this service."""
     name: str
     version: str
     description: str
@@ -386,51 +444,60 @@ class InfoResponse(BaseModel):
     auth: dict
 
 
-# ==================== 工具函数 ====================
+class OscTarget(BaseModel):
+    """Where OSC messages go (VRChat's OSC input)."""
+    host: str = Field(..., description="IPv4 address or host name of the PC that runs VRChat", examples=["127.0.0.1"])
+    port: int = Field(9000, description="VRChat's OSC input port (UDP), 1-65535", examples=[9000])
+
+
+class ServerAddress(BaseModel):
+    """Where the web server listens (takes effect after a restart)."""
+    listen_host: Optional[str] = Field(None, description="Bind address: 0.0.0.0 = all networks, 127.0.0.1 = this PC only")
+    listen_port: Optional[int] = Field(None, description="HTTP port, 1-65535")
+
+
+class PasswordChange(BaseModel):
+    """Set, change or remove the password."""
+    current_password: Optional[str] = Field(None, description="Required when a password is set")
+    new_password: Optional[str] = Field(None, description="The new password; empty / null = no password")
+
+
+# ==================== helpers ====================
 
 
 def _limits(use: Optional[dict] = None) -> tuple[int, int]:
-    """长度限制 (字符, 行)：发到游戏聊天框时按它的限制，只发显示屏时可以更长"""
+    """length limits (characters, lines): the game chatbox's when it gets the message, longer for the display only"""
     return (MAX_CHARS, MAX_LINES) if (use or _outputs)["chatbox"] else (KD_MAX_CHARS, KD_MAX_LINES)
 
 
 def _use(targets: Optional[list[str]]) -> dict:
-    """打开的输出里，这一次要用的那些"""
+    """the outputs (among the ones that are on) this request goes to"""
     if targets is None:
         return dict(_outputs)
     bad = [t for t in targets if t not in _outputs]
     if bad:
-        raise HTTPException(status_code=400, detail=f"targets 只能是 chatbox / kd: {bad}")
+        raise HTTPException(status_code=400, detail=f"targets can only be chatbox / kd: {bad}")
     return {k: _outputs[k] and k in targets for k in _outputs}
 
 
 def _validate_text(text: str, use: Optional[dict] = None) -> str:
     max_chars, max_lines = _limits(use)
     if len(text) > max_chars:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"text 过长: {len(text)} > {max_chars} 字符",
-        )
+        raise HTTPException(status_code=400, detail=f"Text too long: {len(text)} > {max_chars} characters")
     if text == "":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="text 不能为空",
-        )
+        raise HTTPException(status_code=400, detail="Text must not be empty")
     nlines = text.count("\n") + 1
     if nlines > max_lines:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"text 换行过多: {nlines} > {max_lines} 行",
-        )
+        raise HTTPException(status_code=400, detail=f"Too many lines: {nlines} > {max_lines}")
     return text
 
 
 def _dns_resolves(host: str) -> tuple[bool, Optional[str]]:
-    """判断 host 能否解析（不做端口握手，UDP 无法可靠判断）。"""
+    """does host resolve (UDP has no handshake: this is all that can be checked)"""
     try:
         socket.getaddrinfo(host, None)
         return True, None
-    except Exception as e:
+    except Exception as e:     # noqa: BLE001
         return False, str(e)
 
 
@@ -446,60 +513,36 @@ def _next_message_id() -> int:
 api = APIRouter(prefix="/api/v1", dependencies=[AuthDep])
 
 
-@api.get("/info", response_model=InfoResponse, tags=["meta"], summary="服务元信息")
+@api.get("/info", response_model=InfoResponse, tags=["meta"], summary="About this service")
 def get_info() -> InfoResponse:
-    """返回服务名 / 版本 / 认证配置等元信息。"""
     return InfoResponse(
-        name="VRChat Chatbox Bridge",
-        version="2.0.0",
-        description="把 HTTP 请求转成 OSC 消息，发到 VRChat 的 chatbox。需要煎蛋认证。",
-        vrc_target=f"{VRC_HOST}:{VRC_PORT}",
-        auth={
-            "type": "basic",
-            "realm": AUTH_REALM,
-            "password_env": "AUTH_PASSWORD",
-            "hint": 'curl 示例: -u ":$AUTH_PASSWORD"  /  header: Authorization: Basic base64(":<密码>")',
-        },
+        name="vrc-chatbox",
+        version=__version__,
+        description="Sends HTTP requests to the VRChat chatbox as OSC messages.",
+        vrc_target=f"{_osc['host']}:{_osc['port']}",
+        auth={"type": "basic" if SETTINGS.auth_enabled() else "none", "enabled": SETTINGS.auth_enabled(),
+              "realm": WWW_AUTH_REALM, "hint": 'curl -u ":$PASSWORD" …  (any user name)'},
     )
 
 
-@api.get("/config", response_model=ConfigResponse, tags=["meta"], summary="运行时配置")
+@api.get("/config", response_model=ConfigResponse, tags=["meta"], summary="Runtime configuration")
 def get_config() -> ConfigResponse:
-    """返回当前运行时配置（环境变量 + 限制）。"""
-    return ConfigResponse(
-        vrc_host=VRC_HOST,
-        vrc_port=VRC_PORT,
-        listen_host=LISTEN_HOST,
-        listen_port=LISTEN_PORT,
-        max_chars=MAX_CHARS,
-        max_lines=MAX_LINES,
-        history_max=HISTORY_MAX,
-        auth_enabled=True,
-        auth_realm=AUTH_REALM,
-    )
+    lh, lp = _listen()
+    return ConfigResponse(vrc_host=_osc["host"], vrc_port=_osc["port"], listen_host=lh, listen_port=lp,
+                          max_chars=MAX_CHARS, max_lines=MAX_LINES, history_max=HISTORY_MAX,
+                          auth_enabled=SETTINGS.auth_enabled(), auth_realm=WWW_AUTH_REALM)
 
 
-@api.get("/health", response_model=HealthResponse, tags=["meta"], summary="健康检查")
+@api.get("/health", response_model=HealthResponse, tags=["meta"], summary="Health check")
 def get_health() -> HealthResponse:
-    """健康检查 + 当前目标配置。
-
-    UDP 没有握手，无法可靠判断 VRChat 是否在监听；
-    这里只验证目标 host 能否被解析。
-    """
-    ok, err = _dns_resolves(VRC_HOST)
-    return HealthResponse(
-        ok=ok,
-        vrc_host=VRC_HOST,
-        vrc_port=VRC_PORT,
-        max_chars=MAX_CHARS,
-        max_lines=MAX_LINES,
-        auth_enabled=True,
-        error=err,
-    )
+    """`ok` = the OSC target host resolves. UDP has no handshake, so whether VRChat listens cannot be checked."""
+    ok, err = _dns_resolves(_osc["host"])
+    return HealthResponse(ok=ok, vrc_host=_osc["host"], vrc_port=_osc["port"], max_chars=MAX_CHARS,
+                          max_lines=MAX_LINES, auth_enabled=SETTINGS.auth_enabled(), error=err)
 
 
 class _ChatboxThrottle:
-    """VRChat 的聊天框有频率限制：实时更新最多每 1.5 秒发一次（总是发最新的内容），定稿立即发"""
+    """VRChat rate-limits the chatbox: live updates at most every 1.5 s (always the newest text), final ones at once"""
     GAP = 1.5
 
     def __init__(self):
@@ -509,9 +552,8 @@ class _ChatboxThrottle:
         self.timer = None
 
     def send(self, text: str, final: bool, sfx: bool) -> None:
-        import time as _t
         with self.lock:
-            now = _t.monotonic()
+            now = time.monotonic()
             if self.timer is not None:
                 self.timer.cancel(); self.timer = None
             if final or now - self.last >= self.GAP:
@@ -528,11 +570,13 @@ class _ChatboxThrottle:
             self.timer.start()
 
     def _flush(self) -> None:
-        import time as _t
         with self.lock:
             if self.pending is not None:
-                _chatbox_live(self.pending)
-                self.last = _t.monotonic()
+                try:
+                    _chatbox_live(self.pending)
+                except HTTPException as e:              # (a timer thread: nobody to answer)
+                    log.warning("live update not sent: %s", e.detail)
+                self.last = time.monotonic()
                 self.pending = None
             self.timer = None
 
@@ -540,29 +584,25 @@ class _ChatboxThrottle:
 _cb = _ChatboxThrottle()
 
 
-@api.post(
-    "/messages",
-    response_model=MessageItem,
-    status_code=status.HTTP_201_CREATED,
-    tags=["messages"],
-    summary="发一条消息（或开始实时打一条）",
-)
+@api.post("/messages", response_model=MessageItem, status_code=status.HTTP_201_CREATED, tags=["messages"],
+          summary="Send a message (or start typing one live)")
 def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
-    """发到打开的输出（或 `targets` 里的）。`final=false`：这条还在打，显示屏上实时显示，游戏聊天框节流更新；
-    之后 `PATCH /messages/{id}` 更新 / 定稿，`DELETE /messages/{id}` 放弃。`immediate=false`：只填进游戏键盘。"""
+    """Goes to the outputs that are on (or the ones in `targets`). `final=false`: still being typed, shown live
+    (the display in place, the game chatbox throttled); then `PATCH /messages/{id}` to update / finish it,
+    `DELETE /messages/{id}` to drop it. `immediate=false`: only put it into the game's keyboard."""
     final = bool(req.final) and not req.live
     use = _use(req.targets)
     text = _validate_text(req.text, use)
     if not (use["chatbox"] or use["kd"]):
-        raise HTTPException(status_code=409, detail="没有要发的输出：先打开游戏聊天框或 Klaude 显示屏")
-    if not req.immediate:                                      # 只填进游戏的键盘（不发送）
+        raise HTTPException(status_code=409, detail="No output to send to: turn on the game chatbox or the Klaude display")
+    if not req.immediate:                                      # only into the game's keyboard (not sent)
         if use["chatbox"]:
             _chatbox_send(text, False, False)
         return MessageItem(id=0, text=text, immediate=False, sfx=False, output="chatbox",
                            created_at=datetime.now(timezone.utc).isoformat(), length=len(text), targets=["chatbox"])
-    kd_id = _kd.new_message(text, final, bool(req.sfx)) if use["kd"] and _kd is not None else None
     if use["chatbox"]:
-        _cb.send(text, final, bool(req.sfx))
+        _cb.send(text, final, bool(req.sfx))                   # (first: an OSC error must not leave a kd message)
+    kd_id = _kd.new_message(text, final, bool(req.sfx)) if use["kd"] and _kd is not None else None
     targets = [k for k in ("chatbox", "kd") if use[k]]
     msg = MessageItem(output="+".join(targets), id=_next_message_id(), text=text, immediate=True, sfx=bool(req.sfx),
                       created_at=datetime.now(timezone.utc).isoformat(), length=len(text), kd_id=kd_id,
@@ -578,17 +618,19 @@ def _find(message_id: int) -> MessageItem:
         for msg in reversed(_history):
             if msg.id == message_id:
                 return msg
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"message {message_id} 不存在")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Message {message_id} not found")
 
 
-@api.patch("/messages/{message_id}", response_model=MessageItem, tags=["messages"], summary="更新 / 定稿 / 编辑一条消息")
+@api.patch("/messages/{message_id}", response_model=MessageItem, tags=["messages"],
+           summary="Update / finish / edit a message")
 def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> MessageItem:
-    """还在打的消息：更新内容，`final=true` 定稿。已经发出的消息：编辑（显示屏上原地改，显示 edited；可以
-    `final=false` 实时改，最后 `final=true` 定稿；`cancel=true` 恢复原文）。游戏聊天框只显示最新的一条：
-    改的是它最新那条时会重新发。"""
+    """A message still being typed: new text, `final=true` finishes it. A sent message: an edit (the display
+    changes it in place and shows 'edited'; `final=false` while editing live, `final=true` at the end;
+    `cancel=true` restores the text). The game chatbox only shows its newest message: it is resent only when that
+    one is edited."""
     msg = _find(message_id)
     if msg.reverted:
-        raise HTTPException(status_code=409, detail="这条已经撤回了")
+        raise HTTPException(status_code=409, detail="This message was reverted")
     use = {"chatbox": "chatbox" in msg.targets and _outputs["chatbox"], "kd": msg.kd_id is not None and _outputs["kd"]}
     text = _validate_text(body.text, use)
     with _history_lock:
@@ -622,107 +664,67 @@ _edit_sessions: dict = {}         # message id -> its "edited" state before the 
 
 
 @api.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["messages"],
-            summary="放弃一条还在打的消息", response_class=Response)
+            summary="Drop a message that is still being typed", response_class=Response)
 def drop_message(message_id: int, user: str = AuthDep) -> Response:
-    """只用于还没定稿的消息（输入框清空 / Esc）：显示屏上整条去掉，游戏聊天框清空。"""
+    """Only for messages not finished yet (input emptied / Esc): removed from the display, the game chatbox is
+    cleared."""
     msg = _find(message_id)
     if msg.final:
-        raise HTTPException(status_code=409, detail="已经发出的消息请用撤回")
+        raise HTTPException(status_code=409, detail="This message was already sent: revert it instead")
     if msg.kd_id is not None and _kd is not None:
         _kd.remove_message(msg.kd_id)
-    if "chatbox" in msg.targets and _outputs["chatbox"]:
-        _cb.send("", True, False)
     with _history_lock:
         try:
             _history.remove(msg)
         except ValueError:
             pass
+    if "chatbox" in msg.targets and _outputs["chatbox"]:
+        _cb.send("", True, False)
     return Response(status_code=204)
 
 
-@api.post("/messages/{message_id}/revert", response_model=MessageItem, tags=["messages"], summary="撤回消息")
+@api.post("/messages/{message_id}/revert", response_model=MessageItem, tags=["messages"], summary="Revert a message")
 def revert_message(message_id: int, user: str = AuthDep) -> MessageItem:
-    """Klaude 显示屏上这条变成 message reverted。游戏聊天框里的消息 VRChat 没法撤回。"""
+    """The Klaude display shows 'message reverted' instead. VRChat cannot revert game chatbox messages."""
     msg = _find(message_id)
     if msg.kd_id is None or _kd is None or not _kd.revert_message(msg.kd_id):
-        raise HTTPException(status_code=409, detail="只有发到 Klaude 显示屏、而且还在屏幕记录里的消息能撤回")
+        raise HTTPException(status_code=409, detail="Only messages on the Klaude display (still in its log) can be reverted")
     msg.reverted = True
     msg.final = True
     log.info("revert: id=%d user=%s", msg.id, user)
     return msg
 
 
-@api.get(
-    "/messages",
-    response_model=MessageList,
-    tags=["messages"],
-    summary="分页列出历史消息",
-)
+@api.get("/messages", response_model=MessageList, tags=["messages"], summary="Message history (newest first)")
 def list_messages(
-    limit: int = Query(20, ge=1, le=HISTORY_MAX, description="返回条目数量（1-50）"),
-    offset: int = Query(0, ge=0, description="跳过的条目数"),
+    limit: int = Query(20, ge=1, le=HISTORY_MAX, description="How many (1-50)"),
+    offset: int = Query(0, ge=0, description="How many to skip"),
 ) -> MessageList:
-    """分页列出最近发送的消息（最新在前）。"""
     with _history_lock:
         snapshot = list(_history)
     snapshot.reverse()
-    page = snapshot[offset:offset + limit]
-    return MessageList(
-        items=page,
-        total=len(snapshot),
-        limit=limit,
-        offset=offset,
-    )
+    return MessageList(items=snapshot[offset:offset + limit], total=len(snapshot), limit=limit, offset=offset)
 
 
-@api.get(
-    "/messages/{message_id}",
-    response_model=MessageItem,
-    tags=["messages"],
-    summary="获取单条历史消息",
-)
+@api.get("/messages/{message_id}", response_model=MessageItem, tags=["messages"], summary="One message")
 def get_message(message_id: int) -> MessageItem:
-    """按 ID 获取单条已发送的消息。"""
-    with _history_lock:
-        for msg in reversed(_history):
-            if msg.id == message_id:
-                return msg
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"message {message_id} 不存在",
-    )
+    return _find(message_id)
 
 
-@api.delete(
-    "/messages",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["messages"],
-    summary="清空消息历史",
-    response_class=HTMLResponse,  # 占位，避免 FastAPI 默认生成空 body 文档
-)
-def clear_messages() -> None:
-    """清空服务端消息历史（不影响 VRChat 端）。"""
+@api.delete("/messages", status_code=status.HTTP_204_NO_CONTENT, tags=["messages"], summary="Clear the history",
+            response_class=Response)
+def clear_messages() -> Response:
+    """Clears the server's history (nothing changes in VRChat)."""
     with _history_lock:
         n = len(_history)
         _history.clear()
     log.info("message history cleared (%d items)", n)
-    return None
+    return Response(status_code=204)
 
 
-@api.put(
-    "/typing",
-    response_model=TypingState,
-    tags=["typing"],
-    summary="设置 typing 状态",
-)
-def set_typing(
-    state: TypingState,
-    user: str = AuthDep,
-) -> TypingState:
-    """更新 typing 指示器状态（'正在输入'）。
-
-    OSC 地址: `/chatbox/typing <bool>`
-    """
+@api.put("/typing", response_model=TypingState, tags=["typing"], summary="Set the typing indicator")
+def set_typing(state: TypingState, user: str = AuthDep) -> TypingState:
+    """OSC: `/chatbox/typing <bool>` (and the display's 'typing..')."""
     global _typing_state
     _typing_state = bool(state.typing)
     use = _use(state.targets)
@@ -730,25 +732,19 @@ def set_typing(
         _kd.set_typing(_typing_state and use["kd"])            # (off where this text does not go)
     if _outputs["chatbox"]:
         _chatbox_typing(_typing_state and use["chatbox"])
-    log.info("typing: %s user=%s", _typing_state, user)
+    log.debug("typing: %s user=%s", _typing_state, user)
     return TypingState(typing=_typing_state)
 
 
-@api.get(
-    "/typing",
-    response_model=TypingState,
-    tags=["typing"],
-    summary="获取 typing 状态",
-)
+@api.get("/typing", response_model=TypingState, tags=["typing"], summary="The typing indicator")
 def get_typing() -> TypingState:
-    """获取当前 typing 指示器状态。"""
     return TypingState(typing=_typing_state)
 
 
 class OutputsState(BaseModel):
-    """输出开关（可以同时打开）。"""
-    chatbox: Optional[bool] = Field(None, description="游戏自带聊天框")
-    kd: Optional[bool] = Field(None, description="Klaude 头顶显示屏（需要穿着 Klaude，PC）")
+    """Outputs on / off (both can be on)."""
+    chatbox: Optional[bool] = Field(None, description="The game's chatbox")
+    kd: Optional[bool] = Field(None, description="The Klaude display (needs the Klaude avatar, PC)")
 
 
 def _outputs_body() -> dict:
@@ -757,51 +753,191 @@ def _outputs_body() -> dict:
             "max_chars": mc, "max_lines": ml}
 
 
-@api.get("/outputs", tags=["mode"], summary="输出开关")
+@api.get("/outputs", tags=["mode"], summary="Outputs on / off")
 def get_outputs() -> dict:
-    """chatbox / kd 各自是否打开，以及当前的长度限制。"""
+    """Whether chatbox / kd are on, and the current length limits."""
     return _outputs_body()
 
 
-@api.put("/outputs", tags=["mode"], summary="打开 / 关闭输出（部分更新）")
+@api.put("/outputs", tags=["mode"], summary="Turn outputs on / off (partial update)")
 def put_outputs(state: OutputsState, user: str = AuthDep) -> dict:
-    """例如 `{"kd": false}` 关闭显示屏（退场动画），游戏聊天框不受影响。会保存，重启后保持。"""
+    """E.g. `{"kd": false}` turns the display off (it leaves); the game chatbox is not affected. Saved."""
     _set_outputs(state.chatbox, state.kd)
     log.info("outputs: %s user=%s", _outputs_label(), user)
     return _outputs_body()
 
 
-@api.get("/mode", response_model=ModeState, tags=["mode"], summary="（旧）当前输出模式")
+@api.get("/mode", response_model=ModeState, tags=["mode"], summary="(old) The output mode")
 def get_mode() -> ModeState:
-    """兼容旧接口：kd 打开时返回 kd，否则 chatbox。新代码请用 /outputs。"""
+    """Kept for old clients: kd when the display is on, else chatbox. Use /outputs."""
     return ModeState(mode="kd" if _outputs["kd"] else "chatbox", max_chars=_limits()[0], max_lines=_limits()[1])
 
 
-@api.put("/mode", response_model=ModeState, tags=["mode"], summary="（旧）只用一个输出")
+@api.put("/mode", response_model=ModeState, tags=["mode"], summary="(old) Use one output only")
 def put_mode(state: ModeState, user: str = AuthDep) -> ModeState:
-    """兼容旧接口：chatbox = 只用游戏聊天框；kd = 只用显示屏。新代码请用 /outputs。"""
+    """Kept for old clients: chatbox = the game chatbox only; kd = the display only. Use /outputs."""
     if state.mode not in MODES:
-        raise HTTPException(status_code=400, detail=f"mode 必须是 {MODES}")
+        raise HTTPException(status_code=400, detail=f"mode must be one of {MODES}")
     _set_outputs(chatbox=state.mode == "chatbox", kd=state.mode == "kd")
     log.info("outputs: %s user=%s", _outputs_label(), user)
     return get_mode()
 
 
+# ---------------------------------------------------------------- settings: OSC target, server, password, LAN
+
+
+def _osc_body() -> dict:
+    (h, hs), (p, ps) = SETTINGS.get("osc_host"), SETTINGS.get("osc_port")
+    (dh, dhs), (dp, dps) = SETTINGS.env_or_default("osc_host"), SETTINGS.env_or_default("osc_port")
+    return {"host": _osc["host"], "port": _osc["port"], "ip": _osc["ip"], "error": _osc["error"],
+            "source": "settings" if "settings" in (hs, ps) else hs if hs == ps else "env",
+            "default": {"host": dh, "port": dp, "source": "env" if "env" in (dhs, dps) else "default"}}
+
+
+@api.get("/osc", tags=["settings"], summary="The OSC target (where VRChat listens)")
+def get_osc() -> dict:
+    """`source`: settings (changed in the console) / env (VRC_HOST, VRC_PORT) / default (127.0.0.1:9000).
+    `default` = the target after a reset."""
+    return _osc_body()
+
+
+@api.put("/osc", tags=["settings"], summary="Change the OSC target (applies at once, saved)")
+def put_osc(body: OscTarget, user: str = AuthDep) -> dict:
+    host = body.host.strip()
+    if not cfg.valid_host(host):
+        raise HTTPException(status_code=400, detail="Host must be an IPv4 address or a host name")
+    if not cfg.valid_port(body.port):
+        raise HTTPException(status_code=400, detail="Port must be 1-65535")
+    try:
+        _apply_osc_target(host, body.port)
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve {host}: {e.strerror or e}")
+    SETTINGS.set(osc_host=host, osc_port=body.port)
+    log.info("OSC target changed to %s:%d user=%s", host, body.port, user)
+    return _osc_body()
+
+
+@api.delete("/osc", tags=["settings"], summary="Reset the OSC target (VRC_HOST/VRC_PORT, else 127.0.0.1:9000)")
+def reset_osc(user: str = AuthDep) -> dict:
+    SETTINGS.set(osc_host=None, osc_port=None)
+    _osc_target_init()
+    log.info("OSC target reset to %s:%s user=%s", _osc["host"], _osc["port"], user)
+    return _osc_body()
+
+
+def _server_body() -> dict:
+    (h, hs), (p, ps) = SETTINGS.get("listen_host"), SETTINGS.get("listen_port")
+    rh, rp = _listen()
+    at_start = (_server_at_start.get("listen_host", h), _server_at_start.get("listen_port", p))
+    return {"listen_host": h, "listen_port": p, "source": {"listen_host": hs, "listen_port": ps},
+            "running": {"listen_host": rh, "listen_port": rp}, "restart_needed": (h, p) != at_start}
+
+
+@api.get("/settings/server", tags=["settings"], summary="The web server's address")
+def get_server() -> dict:
+    return _server_body()
+
+
+@api.put("/settings/server", tags=["settings"], summary="Change the web server's address (after a restart)")
+def put_server(body: ServerAddress, user: str = AuthDep) -> dict:
+    upd = {}
+    if body.listen_host is not None:
+        h = body.listen_host.strip()
+        if not cfg.valid_host(h):
+            raise HTTPException(status_code=400, detail="Bind address must be an IPv4 address or a host name")
+        upd["listen_host"] = h
+    if body.listen_port is not None:
+        if not cfg.valid_port(body.listen_port):
+            raise HTTPException(status_code=400, detail="Port must be 1-65535")
+        upd["listen_port"] = body.listen_port
+    if upd:
+        SETTINGS.set(**upd)
+        log.info("server address saved: %s (restart to apply) user=%s", upd, user)
+    return _server_body()
+
+
+@api.delete("/settings/server", tags=["settings"], summary="Reset the web server's address")
+def reset_server(user: str = AuthDep) -> dict:
+    SETTINGS.set(listen_host=None, listen_port=None)
+    return _server_body()
+
+
+@api.get("/settings/password", tags=["settings"], summary="Is a password set")
+def get_password() -> dict:
+    """`source`: settings (set in the console) / env (AUTH_PASSWORD) / null (no password)."""
+    return {"enabled": SETTINGS.auth_enabled(), "source": SETTINGS.auth_source()}
+
+
+@api.put("/settings/password", tags=["settings"], summary="Set, change or remove the password")
+def put_password(body: PasswordChange, request: Request, user: str = AuthDep) -> dict:
+    """Needs `current_password` when a password is set. `new_password` empty = no password (also turns off
+    AUTH_PASSWORD). Stored as a salted PBKDF2 hash. Browsers then ask for the new password."""
+    if SETTINGS.auth_enabled() and not SETTINGS.check_password(body.current_password or ""):
+        raise HTTPException(status_code=403, detail="The current password is wrong")
+    new = body.new_password or ""
+    if new and not (cfg.MIN_PASSWORD <= len(new) <= cfg.MAX_PASSWORD):
+        raise HTTPException(status_code=400, detail=f"The password must be {cfg.MIN_PASSWORD}-{cfg.MAX_PASSWORD} characters")
+    SETTINGS.set_password(new or None)
+    log.info("password %s by %s", "set" if new else "removed", request.client.host if request.client else "?")
+    return get_password()
+
+
+def _network_body(request: Request) -> dict:
+    lh, lp = _listen()
+    if RUNTIME["listen_port"] is None and request.url.port:       # (run by uvicorn directly: the port in use)
+        lp = request.url.port
+    urls = netinfo.urls(lh, lp)
+    all_ifaces = lh in ("0.0.0.0", "", "::")
+    return {"urls": urls, "listen_host": lh, "listen_port": lp, "all_interfaces": all_ifaces,
+            "auth_enabled": SETTINGS.auth_enabled(), "open_on_lan": all_ifaces and not SETTINGS.auth_enabled(),
+            "version": __version__}
+
+
+@api.get("/network", tags=["settings"], summary="Where phones on the LAN can open the console")
+def get_network(request: Request) -> dict:
+    """`urls`: http://<LAN IPv4>:<port>/ for every LAN address (virtual / VPN adapters skipped).
+    `open_on_lan`: no password and listening on all networks = everyone on the LAN can use the console."""
+    return _network_body(request)
+
+
+@api.get("/network/qr.svg", tags=["settings"], summary="QR code (SVG) of a URL", response_class=Response)
+def get_qr(url: str = Query(..., max_length=300, description="The URL to encode (http/https)")) -> Response:
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Only http(s) URLs")
+    import io
+    import segno
+    buf = io.BytesIO()
+    segno.make(url, error="m").save(buf, kind="svg", scale=6, border=2, dark="#101218", light="#ffffff",
+                                     xmldecl=False, svgns=True)
+    return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
+@api.get("/settings", tags=["settings"], summary="All settings at once")
+def get_settings(request: Request) -> dict:
+    return {"version": __version__, "osc": _osc_body(), "server": _server_body(), "password": get_password(),
+            "network": _network_body(request), "warning": SETTINGS.warning}
+
+
+# ---------------------------------------------------------------- the Klaude display
+
+
 def _need_kd():
     if _kd is None:
-        raise HTTPException(status_code=503, detail=f"kd 输出不可用: {_KD_IMPORT_ERROR}")
+        raise HTTPException(status_code=503, detail=f"The Klaude display output is not available: {_KD_IMPORT_ERROR}")
     return _kd
 
 
-@api.get("/kd/settings", tags=["kd"], summary="kd 显示屏选项")
+@api.get("/kd/settings", tags=["kd"], summary="Display options")
 def get_kd_settings() -> dict:
-    """所有选项及可选值：layout(chat/single)、scale(1/2)、long(left/up/cut)、speed、show_time、divider、clock、
-    date、invert、highlight、image_full、color / alt / accent / meta（调色板序号；alt 0 = 关）、image_fit、image_screen、image_res（high / low：图片全分辨率或 2×2 像素点，低分辨率约快 3 倍）、size（显示屏宽度，米，0.20–0.60）、screen。"""
+    """All options and their choices: layout (chat/single), scale (1/2), long (left/up/cut), speed, show_time,
+    divider, clock, date, invert, highlight, image_full, color / alt / accent / meta (palette index; alt 0 = off),
+    image_fit, image_screen, image_res (high / low: full resolution or 2×2 pixels, low is ~3× faster), size (the
+    display's width in metres, 0.20-0.60), screen."""
     k = _need_kd()
     return {"settings": k.s, "choices": {k2: list(v) for k2, v in kd_chat.CHOICES.items()}, "defaults": kd_chat.DEFAULTS}
 
 
-@api.put("/kd/settings", tags=["kd"], summary="修改 kd 显示屏选项（部分更新）")
+@api.put("/kd/settings", tags=["kd"], summary="Change display options (partial update)")
 def put_kd_settings(body: dict, user: str = AuthDep) -> dict:
     k = _need_kd()
     try:
@@ -813,573 +949,183 @@ def put_kd_settings(body: dict, user: str = AuthDep) -> dict:
     return {"settings": s}
 
 
-@api.post("/kd/clear", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="清空 kd 显示屏上的消息",
+@api.post("/kd/clear", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="Clear the display's messages",
           response_class=Response)
 def kd_clear(user: str = AuthDep) -> Response:
     _need_kd().clear()
     return Response(status_code=204)
 
 
-@api.post("/kd/chime", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="在 avatar 上播放一次提示音",
+@api.post("/kd/chime", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="Play the chime on the avatar",
           response_class=Response)
 def kd_chime(user: str = AuthDep) -> Response:
-    """需要穿着 Klaude（PC）。和发送时的提示音是同一个。"""
+    """Needs the Klaude avatar (PC). The same sound as on sending."""
     _need_kd().chime()
     return Response(status_code=204)
 
 
-@api.post("/kd/image", tags=["kd"], summary="在 kd 显示屏上显示一张图片")
+@api.post("/kd/image", tags=["kd"], summary="Show a picture on the display")
 async def kd_image(request: Request, user: str = AuthDep) -> dict:
-    """请求体 = 图片文件本身（png / jpg / webp / gif…，最大 10 MB）。图片会被裁切、调整对比度和颜色，
-    用 16 色（其中 10 色取自图片）显示在标题栏下面，直到下一条消息或 DELETE /kd/image。约 40 页，3 Hz 下约 15 秒传完。"""
+    """Body = the image file itself (png / jpg / webp / gif…, at most 10 MB). It is cropped, its contrast and
+    colours adjusted, shown with 16 colours (10 taken from the picture) under the header until the next message or
+    DELETE /kd/image."""
     k = _need_kd()
     data = await request.body()
     if not data:
-        raise HTTPException(status_code=400, detail="空的图片")
+        raise HTTPException(status_code=400, detail="Empty image")
     if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="图片太大（最大 10 MB）")
+        raise HTTPException(status_code=413, detail="Image too large (at most 10 MB)")
     try:
         info = await run_in_threadpool(k.show_image, data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"无法读取图片: {e}")
+    except Exception as e:     # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Cannot read the image: {e}")
     log.info("kd image: %d B user=%s", len(data), user)
     return info
 
 
-@api.delete("/kd/image", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="关闭图片，回到消息",
+@api.delete("/kd/image", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="Close the picture",
             response_class=Response)
 def kd_image_close(user: str = AuthDep) -> Response:
     _need_kd().close_image()
     return Response(status_code=204)
 
 
-@api.get("/kd/status", tags=["kd"], summary="kd 发送状态")
+@api.get("/kd/status", tags=["kd"], summary="Display sending status")
 def kd_status() -> dict:
-    """active、pending_pages（还没发出去的页）、eta_s、synced（全部发完且校验和一致 = 头顶状态灯是绿的）。"""
+    """active, pending_pages (not sent yet), eta_s, synced (all sent and the checksum matches = the green light)."""
     return _need_kd().status()
 
 
-@api.get("/kd/preview.png", tags=["kd"], summary="kd 显示屏预览（已发出的内容）", response_class=Response)
+@api.get("/kd/preview.png", tags=["kd"], summary="Display preview (what was sent)", response_class=Response)
 def kd_preview() -> Response:
     return Response(_need_kd().preview_png(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
-# 注册 API 路由
 app.include_router(api)
 
 
-# ==================== UI（也受煎蛋认证保护） ====================
+# ==================== the web console ====================
 
 
-UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
-UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascript", "app.css": "text/css"}
+def _read_ui(name: str) -> str:
+    with open(os.path.join(UI_DIR, name), encoding="utf-8") as f:
+        return f.read()
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False, dependencies=[AuthDep])
-def landing() -> Response:
-    """控制台（ui/index.html；也受煎蛋认证保护）"""
-    with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
-        return HTMLResponse(f.read(), headers={"Cache-Control": "no-store"})
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def landing(request: Request, session: Optional[str] = None,
+            creds: Optional[HTTPBasicCredentials] = Depends(security)) -> Response:
+    """the console (ui/index.html). ?session=<token>: the desktop app's window (sets its cookie)."""
+    if session is not None:
+        if SESSION_TOKEN and hmac.compare_digest(session, SESSION_TOKEN):
+            r = RedirectResponse("/", status_code=303)
+            r.set_cookie(SESSION_COOKIE, SESSION_TOKEN, httponly=True, samesite="strict")
+            return r
+        return RedirectResponse("/", status_code=303)
+    require_auth(request, creds)
+    return HTMLResponse(_read_ui("index.html"), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/ui/{name}", include_in_schema=False, dependencies=[AuthDep])
 def ui_file(name: str) -> Response:
     if name not in UI_FILES:
         raise HTTPException(status_code=404)
-    with open(os.path.join(UI_DIR, name), encoding="utf-8") as f:
-        return Response(f.read(), media_type=UI_FILES[name] + "; charset=utf-8", headers={"Cache-Control": "no-store"})
+    return Response(_read_ui(name), media_type=UI_FILES[name] + "; charset=utf-8", headers={"Cache-Control": "no-store"})
 
 
-# ==================== 公开文档（无需煎蛋认证） ====================
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(_read_ui("icon.svg"), media_type="image/svg+xml")
+
+
+# ==================== /docs: a readable API overview (public; the API itself still needs the password) ====================
 
 
 def _render_docs_html() -> str:
-    """渲染公开的 API 文档页面（人类可读版）。"""
-    return f"""<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VRChat Chatbox Bridge · API 文档</title>
-  <style>
-    :root {{
-      --bg: #0f1117;
-      --bg-2: #181b25;
-      --bg-3: #232733;
-      --fg: #e8eaf0;
-      --fg-dim: #9aa0b0;
-      --accent: #6c8cff;
-      --accent-2: #5a78e8;
-      --ok: #4ade80;
-      --warn: #fbbf24;
-      --err: #f87171;
-      --border: #2a2f3d;
-      --code-bg: #0b0d13;
-      --radius: 12px;
-    }}
-    * {{ box-sizing: border-box; }}
-    html, body {{
-      margin: 0; padding: 0;
-      background: var(--bg); color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-                   "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      font-size: 16px; line-height: 1.65;
-      -webkit-text-size-adjust: 100%;
-    }}
-    body {{
-      max-width: 920px; margin: 0 auto;
-      padding: 40px 22px 100px;
-    }}
-
-    /* Hero */
-    .hero {{
-      text-align: center;
-      padding: 24px 0 36px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 32px;
-    }}
-    .hero h1 {{
-      font-size: 30px; margin: 0 0 8px; font-weight: 700;
-      letter-spacing: -0.5px;
-    }}
-    .hero .sub {{ color: var(--fg-dim); font-size: 15px; margin: 0 0 14px; }}
-    .hero .badges {{ display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: center; }}
-    .badge {{
-      display: inline-block;
-      font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
-      padding: 4px 10px; border-radius: 999px;
-      font-family: ui-monospace, "SF Mono", monospace;
-    }}
-    .badge.eg {{
-      background: linear-gradient(135deg, #fbbf24, #f59e0b);
-      color: #1f1300;
-    }}
-    .badge.ver {{
-      background: var(--bg-3); color: var(--fg-dim);
-      border: 1px solid var(--border);
-    }}
-    .badge.target {{
-      background: var(--bg-2); color: var(--accent);
-      border: 1px solid var(--border);
-    }}
-
-    /* TOC */
-    nav.toc {{
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px 18px;
-      margin-bottom: 36px;
-    }}
-    nav.toc h3 {{
-      margin: 0 0 8px;
-      font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
-      color: var(--fg-dim); font-weight: 700;
-    }}
-    nav.toc ul {{ list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 24px; }}
-    nav.toc li {{ margin: 3px 0; break-inside: avoid; }}
-    nav.toc a {{
-      color: var(--accent); text-decoration: none; font-size: 14px;
-      display: block; padding: 2px 0;
-    }}
-    nav.toc a:hover {{ text-decoration: underline; }}
-
-    /* Sections */
-    section {{ margin: 44px 0; scroll-margin-top: 16px; }}
-    section h2 {{
-      font-size: 22px;
-      border-left: 3px solid var(--accent);
-      padding-left: 12px;
-      margin: 0 0 18px;
-    }}
-    section h3 {{
-      font-size: 17px;
-      color: var(--fg);
-      margin: 28px 0 10px;
-      font-weight: 600;
-    }}
-    section h4 {{
-      font-size: 12px;
-      color: var(--fg-dim);
-      margin: 18px 0 6px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-    }}
-    section p {{ color: var(--fg-dim); margin: 10px 0; }}
-    section ul {{ color: var(--fg-dim); padding-left: 22px; }}
-    section li {{ margin: 5px 0; }}
-    section strong {{ color: var(--fg); }}
-
-    /* Inline code */
-    code {{ font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace; }}
-    .ic {{
-      background: var(--bg-3);
-      color: var(--fg);
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 0.88em;
-    }}
-
-    /* Endpoint card */
-    .ep {{
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px 18px;
-      margin: 14px 0;
-    }}
-    .ep-head {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-    .m {{
-      display: inline-block;
-      padding: 3px 9px;
-      border-radius: 6px;
-      font-family: ui-monospace, monospace;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-    }}
-    .m.get    {{ background: #14532d; color: #bbf7d0; }}
-    .m.post   {{ background: #1e3a8a; color: #bfdbfe; }}
-    .m.put    {{ background: #78350f; color: #fde68a; }}
-    .m.delete {{ background: #7f1d1d; color: #fecaca; }}
-    .ep-path {{
-      font-family: ui-monospace, monospace; font-size: 15px;
-      font-weight: 600;
-    }}
-    .ep-desc {{ color: var(--fg-dim); font-size: 13.5px; margin: 8px 0 12px; }}
-
-    /* Code block */
-    pre {{
-      background: var(--code-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px 16px;
-      overflow-x: auto;
-      margin: 10px 0;
-      font-size: 13px;
-      line-height: 1.55;
-      cursor: pointer;
-      position: relative;
-      transition: box-shadow .15s, border-color .15s;
-    }}
-    pre:hover {{ border-color: var(--accent); }}
-    pre::after {{
-      content: "点击复制";
-      position: absolute; top: 8px; right: 12px;
-      font-size: 10px; color: var(--fg-dim);
-      opacity: 0; transition: opacity .15s;
-      pointer-events: none;
-    }}
-    pre:hover::after {{ opacity: 0.6; }}
-
-    /* Tables */
-    table {{
-      width: 100%; border-collapse: collapse;
-      margin: 14px 0;
-      background: var(--bg-2);
-      border-radius: var(--radius);
-      overflow: hidden;
-      border: 1px solid var(--border);
-    }}
-    th, td {{
-      padding: 10px 14px; text-align: left;
-      border-bottom: 1px solid var(--border);
-      font-size: 14px;
-      vertical-align: top;
-    }}
-    th {{
-      background: var(--bg-3); color: var(--fg-dim);
-      font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
-      font-weight: 700;
-    }}
-    tr:last-child td {{ border-bottom: 0; }}
-    td code {{ background: var(--bg-3); padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
-
-    /* Auth box */
-    .auth {{
-      background: rgba(251,191,36,.08);
-      border: 1px solid rgba(251,191,36,.25);
-      border-radius: var(--radius);
-      padding: 16px 18px;
-      margin: 14px 0;
-      color: var(--fg);
-    }}
-    .auth strong {{ color: var(--warn); }}
-    .auth code {{ background: var(--bg-3); padding: 2px 6px; border-radius: 4px; }}
-
-    /* Links section */
-    .links {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }}
-    .links a {{
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 10px 14px;
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--accent);
-      text-decoration: none;
-      font-size: 14px;
-      transition: background .15s, border-color .15s;
-    }}
-    .links a:hover {{ background: var(--bg-3); border-color: var(--accent); }}
-
-    /* Footer */
-    footer {{
-      margin-top: 60px; padding-top: 24px;
-      border-top: 1px solid var(--border);
-      color: var(--fg-dim); font-size: 12px; text-align: center;
-    }}
-
-    /* Responsive */
-    @media (max-width: 600px) {{
-      body {{ padding: 24px 14px 60px; }}
-      .hero h1 {{ font-size: 22px; }}
-      .hero .sub {{ font-size: 13px; }}
-      nav.toc ul {{ columns: 1; }}
-      section h2 {{ font-size: 18px; }}
-      section h3 {{ font-size: 15px; }}
-      pre {{ font-size: 12px; }}
-      table {{ font-size: 13px; }}
-      th, td {{ padding: 8px 10px; }}
-    }}
-  </style>
-</head>
-<body>
-
-<div class="hero">
-  <h1>🍳 VRChat Chatbox Bridge</h1>
-  <p class="sub">HTTP → OSC 网关，把请求转成 VRChat chatbox 消息</p>
-  <div class="badges">
-    <span class="badge eg">煎蛋认证</span>
-    <span class="badge ver">v2.0.0</span>
-    <span class="badge target">→ {VRC_HOST}:{VRC_PORT}</span>
-  </div>
-</div>
-
-<nav class="toc">
-  <h3>目录</h3>
-  <ul>
-    <li><a href="#quickstart">30 秒上手</a></li>
-    <li><a href="#auth">煎蛋认证</a></li>
-    <li><a href="#api">API 参考</a></li>
-    <li><a href="#config">配置</a></li>
-    <li><a href="#limits">限制</a></li>
-    <li><a href="#links">相关链接</a></li>
-  </ul>
-</nav>
-
-<section id="quickstart">
-  <h2>30 秒上手</h2>
-  <p>服务默认跑在 <code class="ic">0.0.0.0:8080</code>，把 HTTP 请求转成 OSC 消息发给 VRChat（<code class="ic">VRC_HOST:VRC_PORT</code>，默认 <code class="ic">127.0.0.1:9000</code>）。</p>
-  <p>发一条消息只需要：</p>
-  <pre>curl -u ":$AUTH_PASSWORD" -X POST http://localhost:8080/api/v1/messages \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"text":"Hello VRChat!","immediate":true,"sfx":true}}'</pre>
-  <p>或者打开 <a href="/">/</a> 用网页控制台（浏览器会弹原生登录框，输入 <code class="ic">AUTH_PASSWORD</code> 里的密码）。</p>
-</section>
-
-<section id="auth">
-  <h2>煎蛋认证 🍳</h2>
-  <div class="auth">
-    <strong>所有 API 请求</strong>都需要 HTTP Basic Auth。
-    用户名任意，密码是环境变量 <code>AUTH_PASSWORD</code>（或同目录 <code>.env</code>）里设置的值。
-    下面的例子假设 shell 里已经 <code class="ic">export AUTH_PASSWORD=...</code>。
-  </div>
-
-  <h3>1. curl（最常用）</h3>
-  <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/health</pre>
-  <p>注意 <code class="ic">-u ":$AUTH_PASSWORD"</code> 中冒号前是用户名（任意），冒号后是密码。</p>
-
-  <h3>2. Authorization 头（任意 HTTP 客户端）</h3>
-  <pre>Authorization: Basic $(echo -n ":$AUTH_PASSWORD" | base64)</pre>
-
-  <h3>3. 浏览器</h3>
-  <p>访问 <code class="ic">/</code> 或 <code class="ic">/swagger</code> 时浏览器会弹原生登录框，
-  输入密码（用户名随便填）即可。浏览器会记住凭证，后续请求自动带上。</p>
-
-  <h3>4. 设置密码</h3>
-  <pre>echo 'AUTH_PASSWORD=换成你自己的密码' >> .env      # 或 export AUTH_PASSWORD=...
-uv run uvicorn app:app --host 0.0.0.0 --port 5555</pre>
-</section>
-
-<section id="api">
-  <h2>API 参考</h2>
-  <p>所有 API 都在 <code class="ic">/api/v1</code> 前缀下，遵循标准 REST 约定：</p>
-  <ul>
-    <li><strong>POST</strong> 创建资源</li>
-    <li><strong>GET</strong> 读取资源（列表 / 单条 / 状态）</li>
-    <li><strong>PUT</strong> 更新状态资源</li>
-    <li><strong>DELETE</strong> 删除 / 清空</li>
-  </ul>
-
-  <h3>元信息 / 配置 / 健康</h3>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/info</span></div>
-    <div class="ep-desc">服务元信息（名称、版本、认证配置）。无需传参。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/info</pre>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/config</span></div>
-    <div class="ep-desc">运行时配置（VRC host/port、监听地址、限制、认证 realm）。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/config</pre>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/health</span></div>
-    <div class="ep-desc">健康检查 + 目标 host DNS 解析结果。UDP 无法可靠判断对端是否监听，只能告诉你 host 至少能解析。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/health</pre>
-  </div>
-
-  <h3>消息（messages）</h3>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m post">POST</span><span class="ep-path">/api/v1/messages</span></div>
-    <div class="ep-desc">发送一条 chatbox 消息。成功返回 <code class="ic">201 Created</code>。</div>
-    <h4>请求体</h4>
-    <pre>{{
-  "text": "Hello VRChat!",   // 必填，最长 144 字符、最多 9 行
-  "immediate": true,         // 可选，默认 true。true=立刻发，false=只填键盘
-  "sfx": true                // 可选，默认 true。是否播放通知音效
-}}</pre>
-    <h4>示例</h4>
-    <pre>curl -u ":$AUTH_PASSWORD" -X POST http://localhost:8080/api/v1/messages \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"text":"Hello!","immediate":true,"sfx":true}}'</pre>
-    <h4>响应 (201 Created)</h4>
-    <pre>{{
-  "id": 1,
-  "text": "Hello!",
-  "immediate": true,
-  "sfx": true,
-  "created_at": "2024-01-01T12:00:00+00:00",
-  "length": 6
-}}</pre>
-    <h4>错误</h4>
-    <ul>
-      <li><code class="ic">400</code> — text 为空 / 超过 144 字符 / 超过 9 行</li>
-      <li><code class="ic">401</code> — 煎蛋认证失败（密码错）</li>
-    </ul>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/messages</span></div>
-    <div class="ep-desc">分页列出最近发送的消息（最新在前）。</div>
-    <h4>Query 参数</h4>
-    <pre>?limit=20     // 1-50，默认 20
-?offset=0      // 跳过的条目数，默认 0</pre>
-    <pre>curl -u ":$AUTH_PASSWORD" 'http://localhost:8080/api/v1/messages?limit=5'</pre>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/messages/{{id}}</span></div>
-    <div class="ep-desc">按 ID 获取单条消息。ID 不存在返回 <code class="ic">404 Not Found</code>。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/messages/1</pre>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m delete">DELETE</span><span class="ep-path">/api/v1/messages</span></div>
-    <div class="ep-desc">清空服务端消息历史。返回 <code class="ic">204 No Content</code>（不影响 VRChat 端已发送的消息）。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" -X DELETE http://localhost:8080/api/v1/messages</pre>
-  </div>
-
-  <h3>Typing 指示器</h3>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m put">PUT</span><span class="ep-path">/api/v1/typing</span></div>
-    <div class="ep-desc">设置 typing 指示器（"正在输入"）。OSC 地址 <code class="ic">/chatbox/typing</code>。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" -X PUT http://localhost:8080/api/v1/typing \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"typing":true}}'</pre>
-  </div>
-
-  <div class="ep">
-    <div class="ep-head"><span class="m get">GET</span><span class="ep-path">/api/v1/typing</span></div>
-    <div class="ep-desc">获取当前 typing 状态。</div>
-    <pre>curl -u ":$AUTH_PASSWORD" http://localhost:8080/api/v1/typing</pre>
-  </div>
-</section>
-
-<section id="config">
-  <h2>环境变量配置</h2>
-  <table>
-    <tr><th>变量</th><th>默认值</th><th>说明</th></tr>
-    <tr><td><code>VRC_HOST</code></td><td><code>127.0.0.1</code></td><td>VRChat 所在机器的 IP</td></tr>
-    <tr><td><code>VRC_PORT</code></td><td><code>9000</code></td><td>VRChat 的 OSC 入站端口</td></tr>
-    <tr><td><code>LISTEN_HOST</code></td><td><code>0.0.0.0</code></td><td>HTTP 服务监听地址</td></tr>
-    <tr><td><code>LISTEN_PORT</code></td><td><code>8080</code></td><td>HTTP 服务监听端口</td></tr>
-    <tr><td><code>AUTH_PASSWORD</code></td><td>（必填）</td><td>煎蛋认证密码</td></tr>
-    <tr><td><code>LOG_LEVEL</code></td><td><code>INFO</code></td><td>日志级别（DEBUG/INFO/WARNING/ERROR）</td></tr>
-  </table>
-</section>
-
-<section id="limits">
-  <h2>限制</h2>
-  <ul>
-    <li><strong>text</strong> 最长 <code class="ic">{MAX_CHARS}</code> 字符、最多 <code class="ic">{MAX_LINES}</code> 行（VRChat 限制）。超出返回 <code class="ic">400 Bad Request</code>。</li>
-    <li>OSC 是 UDP，服务端<strong>无法</strong>知道 VRChat 是否真的收到了 —— 只能保证本地 socket 把包送出去了。</li>
-    <li>VRChat 端需要在 Action Menu → Osc → Enabled 启用 OSC。</li>
-    <li>服务端消息历史最多保留 <code class="ic">{HISTORY_MAX}</code> 条，重启进程会清空。</li>
-    <li>跨域请求如果带凭证（Authorization 头），浏览器要求显式 CORS 来源配置，不允许 <code class="ic">*</code> + credentials 同时存在。</li>
-  </ul>
-</section>
-
-<section id="links">
-  <h2>相关链接</h2>
-  <div class="links">
-    <a href="/">🏠 回到控制台</a>
-    <a href="/swagger">🧪 Swagger UI（交互式 API 浏览器）</a>
-    <a href="/redoc">📖 ReDoc（只读 OpenAPI 渲染）</a>
-    <a href="/openapi.json">⚙️ OpenAPI JSON Schema</a>
-  </div>
-  <h3>外部参考</h3>
-  <ul>
-    <li><a href="https://docs.vrchat.com/docs/osc-overview" target="_blank" rel="noopener">VRChat OSC Overview</a></li>
-    <li><a href="https://docs.vrchat.com/docs/osc-as-input-controller" target="_blank" rel="noopener">OSC as Input Controller</a></li>
-    <li><a href="https://github.com/attwad/python-osc" target="_blank" rel="noopener">python-osc（底层 OSC 库）</a></li>
-  </ul>
-</section>
-
-<footer>
-  🍳 煎蛋认证 · 由 VRChat Chatbox Bridge 提供 · 本页面公开无需认证
-</footer>
-
-<script>
-  // 点击代码块复制内容
-  document.querySelectorAll('pre').forEach((pre) => {{
-    pre.addEventListener('click', async () => {{
-      try {{
-        await navigator.clipboard.writeText(pre.innerText);
-        const orig = pre.style.boxShadow;
-        pre.style.boxShadow = '0 0 0 2px var(--accent)';
-        setTimeout(() => {{ pre.style.boxShadow = orig; }}, 500);
-      }} catch (e) {{
-        // clipboard API 可能被禁用，忽略
-      }}
-    }});
-  }});
-</script>
-
-</body>
-</html>
-"""
+    import html
+    spec = app.openapi()
+    rows = []
+    for path, ops in spec.get("paths", {}).items():
+        for method, op in ops.items():
+            rows.append(f"<tr><td><span class='m {method}'>{method.upper()}</span></td><td><code>{html.escape(path)}</code>"
+                        f"</td><td>{html.escape(op.get('summary', ''))}</td></tr>")
+    auth = "-u &quot;:$PASSWORD&quot; " if SETTINGS.auth_enabled() else ""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>vrc-chatbox API</title>
+<style>
+ body {{ margin: 0 auto; max-width: 900px; padding: 24px 16px 48px; background: #101218; color: #e9e7e3;
+        font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }}
+ a {{ color: #8aa4ff; }} h1 {{ margin: 0 0 4px; }} .sub {{ color: #9aa0ab; margin: 0 0 20px; }}
+ pre, code {{ font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }}
+ pre {{ background: #171a22; border: 1px solid #2a2f3b; border-radius: 10px; padding: 12px; overflow-x: auto; }}
+ table {{ width: 100%; border-collapse: collapse; }} td {{ padding: 6px 8px; border-bottom: 1px solid #2a2f3b; vertical-align: top; }}
+ .m {{ display: inline-block; min-width: 58px; text-align: center; border-radius: 6px; font: 700 11px ui-monospace, monospace; padding: 2px 6px; }}
+ .get {{ background: #1f3b2c; color: #7fe0a0; }} .post {{ background: #3b2f1f; color: #ffc27a; }}
+ .put, .patch {{ background: #1f2c3b; color: #8ac4ff; }} .delete {{ background: #3b1f1f; color: #ff9a9a; }}
+</style></head><body>
+<h1>🍳 vrc-chatbox API</h1>
+<p class="sub">v{__version__} · HTTP → OSC for the VRChat chatbox · <a href="/">console</a> · <a href="/swagger">Swagger UI</a> ·
+<a href="/redoc">ReDoc</a> · <a href="/openapi.json">OpenAPI JSON</a></p>
+<h2>Quick start</h2>
+<pre>curl {auth}-X POST http://localhost:5555/api/v1/messages \\
+  -H 'Content-Type: application/json' -d '{{"text":"Hello VRChat!"}}'</pre>
+<p>All endpoints live under <code>/api/v1</code>. {"A password is set: use HTTP Basic auth (any user name, the password)." if SETTINGS.auth_enabled() else "No password is set: no login is needed."}
+Requests from other web sites are refused unless their origin is listed in <code>ALLOWED_ORIGINS</code>.
+OSC is UDP: the server cannot know whether VRChat received a message.</p>
+<h2>Endpoints</h2><table>{''.join(rows)}</table>
+<p class="sub">Field details: <a href="/swagger">Swagger UI</a>. VRChat OSC: <a href="https://docs.vrchat.com/docs/osc-as-input-controller">OSC as Input Controller</a>.</p>
+</body></html>"""
 
 
-@app.get(
-    "/docs",
-    response_class=HTMLResponse,
-    include_in_schema=False,
-)
+@app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
 def public_docs() -> str:
-    """公开的 API 文档（无需煎蛋认证）。
-
-    任何人（包括没拿到密码的人）都能查看这份文档，
-    但实际调用 API 仍需要 Basic Auth。
-    """
     return _render_docs_html()
 
 
-if __name__ == "__main__":             # `uv run python app.py`: listens on LISTEN_HOST:LISTEN_PORT
+# ==================== command line ====================
+
+
+def port_free(host: str, port: int) -> Optional[str]:
+    """None if host:port can be bound, else a message for the user"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if os.name != "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        return None
+    except OSError as e:
+        if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1), 10048):
+            return (f"Port {port} is already in use (is vrc-chatbox already running?). Close the other program or "
+                    f"choose another port: LISTEN_PORT=<port>, --port <port>, or the Settings of a running console.")
+        if e.errno in (errno.EADDRNOTAVAIL, getattr(errno, "WSAEADDRNOTAVAIL", -1), 10049):
+            return f"Cannot listen on {host}: this computer has no such address. Use 0.0.0.0 (all networks) or 127.0.0.1."
+        if e.errno in (errno.EACCES, getattr(errno, "WSAEACCES", -1), 10013):
+            return f"Not allowed to listen on port {port}. Choose a port above 1024."
+        return f"Cannot listen on {host}:{port}: {e.strerror or e}"
+    finally:
+        s.close()
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    p = argparse.ArgumentParser(prog="vrc-chatbox", description="VRChat chatbox web console and REST API")
+    p.add_argument("--host", help="bind address for this run (default: settings / LISTEN_HOST / 0.0.0.0)")
+    p.add_argument("--port", type=int, help="HTTP port for this run (default: settings / LISTEN_PORT / 5555)")
+    p.add_argument("--version", action="version", version=f"vrc-chatbox {__version__}")
+    a = p.parse_args(argv)
+    host = a.host or SETTINGS.value("listen_host")
+    port = a.port or SETTINGS.value("listen_port")
+    if not cfg.valid_port(port):
+        print(f"error: invalid port {port}", file=sys.stderr)
+        return 2
+    msg = port_free(host, port)
+    if msg:
+        log.error(msg)
+        return 2
+    RUNTIME.update(listen_host=host, listen_port=port)
     import uvicorn
-    uvicorn.run(app, host=LISTEN_HOST, port=LISTEN_PORT, log_level=os.getenv("LOG_LEVEL", "INFO").lower())
+    uvicorn.run(app, host=host, port=port, log_level=os.getenv("LOG_LEVEL", "INFO").lower(), access_log=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
