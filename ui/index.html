@@ -1,223 +1,33 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#101218">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="mobile-web-app-capable" content="yes">
-  <title>VRChat Chatbox</title>
-  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-  <link rel="stylesheet" href="/ui/app.css">
-</head>
-<body>
-  <header class="bar">
-    <h1 class="brand"><img class="logo" src="/ui/icon.svg" alt="" width="22" height="22"><span data-i18n="brand"></span></h1>
-    <div class="outputs" role="group" data-i18n-aria="outputs.aria">
-      <button type="button" data-mode="chatbox" data-i18n-title="out.title" aria-pressed="false">
-        <span class="ico" aria-hidden="true">🎮</span><span class="lbl" data-i18n="out.chatbox"></span><i class="led" aria-hidden="true"></i></button>
-      <button type="button" data-mode="kd" data-i18n-title="out.title" aria-pressed="false">
-        <span class="ico" aria-hidden="true">🖥</span><span class="lbl" data-i18n="out.kd"></span><i class="led" aria-hidden="true"></i></button>
-    </div>
-    <div class="conn" id="conn" role="status" data-i18n-title="conn.title"><i></i><span data-i18n="conn.connecting"></span></div>
-    <button type="button" class="icon-btn" id="openSettings" data-i18n-title="settings.open" data-i18n-aria="settings.open"
-            aria-haspopup="dialog" aria-controls="sheet"><span aria-hidden="true">⚙︎</span></button>
-  </header>
-  <div class="offline" id="offline" role="alert" hidden data-i18n="conn.banner"></div>
-  <div class="notice" id="lanNotice" hidden>
-    <span><span aria-hidden="true">ℹ︎</span> <span data-i18n="lan.notice"></span></span>
-    <span class="notice-act">
-      <button type="button" class="btn sm" id="lanSetPw" data-i18n="lan.setPw"></button>
-      <button type="button" class="icon-btn sm" id="lanDismiss" data-i18n-aria="lan.dismiss" data-i18n-title="lan.dismiss"><span aria-hidden="true">✕</span></button>
-    </span>
-  </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#0c0a09" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
+    <title>kdchat</title>
+    <link href="./_app/immutable/bundle.BIGm5__7.js" rel="modulepreload">
+		
+		<link href="./_app/immutable/assets/bundle.CrD8Gm3Y.css" rel="stylesheet">
+  </head>
+  <body data-sveltekit-preload-data="off">
+    <div style="display: contents">
+			<script>
+				{
+					__sveltekit_1vzaxo = {
+						base: new URL(".", location).pathname.slice(0, -1),
+						version: "1.8.0"
+					};
 
-  <!-- wide screens: composer + history on the left, the display / phone access on the right; phones: the composer is
-       pinned to the bottom -->
-  <main class="grid" id="grid">
-    <section class="card composer" id="composer" data-i18n-aria="composer.aria">
-      <div class="editing" id="editing" hidden>
-        <span class="what"><span data-i18n="composer.editing"></span> <b id="editWhat"></b></span>
-        <button type="button" class="btn sm ghost" id="editCancel" data-i18n="composer.cancel"></button>
-      </div>
-      <textarea id="text" rows="1" enterkeyhint="send" autocomplete="off" data-i18n-aria="composer.aria"></textarea>
-      <div class="meta">
-        <span class="status" id="status" aria-live="polite"></span>
-        <span class="count" id="count"></span>
-      </div>
-      <div class="tools">
-        <div class="quick">
-          <div class="targets" id="targets" role="group" data-i18n-aria="to.aria">
-            <button type="button" data-to="chatbox" data-i18n-aria="to.chatbox" aria-pressed="true"><span aria-hidden="true">🎮</span></button>
-            <button type="button" data-to="kd" data-i18n-aria="to.kd" aria-pressed="true"><span aria-hidden="true">🖥</span></button>
-          </div>
-          <button type="button" class="pill" id="tLive" data-i18n-title="opt.liveDesc" aria-pressed="false">
-            <i class="dot" aria-hidden="true"></i><span data-i18n="opt.liveShort"></span></button>
-          <button type="button" class="btn sm ghost" id="kbFill" data-i18n-title="kbFill.title" data-i18n-aria="kbFill.title">
-            <span aria-hidden="true">⌨️</span><span class="lbl" data-i18n="kbFill"></span></button>
-        </div>
-        <div class="acts">
-          <button type="button" class="btn ghost" id="cancel" hidden data-i18n-title="composer.cancelTitle" data-i18n-aria="composer.cancel">
-            <span aria-hidden="true">✕</span><span class="lbl" data-i18n="composer.cancel"></span></button>
-          <button type="button" class="btn primary send" id="send">
-            <span class="ico" aria-hidden="true">➤</span><span class="lbl" id="sendLbl"></span></button>
-        </div>
-      </div>
-    </section>
+					const element = document.currentScript.parentElement;
 
-    <section class="card hist" aria-labelledby="histTitle">
-      <div class="card-head">
-        <h2 id="histTitle" data-i18n="hist.title"></h2>
-        <button type="button" class="btn sm ghost" id="clearHist" data-i18n="hist.clear"></button>
-      </div>
-      <ul class="history" id="history"></ul>
-    </section>
-
-    <aside class="side" id="side">
-      <section class="card kd" id="kdCol" hidden aria-labelledby="kdTitle">
-        <h2 class="sr-only" id="kdTitle" data-i18n="out.kdLong"></h2>
-        <div class="device"><div class="label"><i></i>Klaude Display</div><img id="prev" data-i18n-alt="kd.previewAlt"><b id="led"></b></div>
-        <div class="kdstat" id="kdStat">…</div>
-        <div class="kd-actions">
-          <button type="button" class="btn sm" id="chime"><span aria-hidden="true">🔔</span><span data-i18n="kd.chime"></span></button>
-          <label class="btn sm" data-i18n-title="kd.imageTitle"><span aria-hidden="true">🖼</span><span data-i18n="kd.image"></span>
-            <input type="file" id="file" accept="image/*" hidden></label>
-          <button type="button" class="btn sm" id="closeImg" hidden><span aria-hidden="true">✕</span><span data-i18n="kd.closeImg"></span></button>
-          <button type="button" class="btn sm ghost" id="kdClear" data-i18n-title="kd.clearTitle"><span data-i18n="kd.clear"></span></button>
-        </div>
-        <p class="hint desk-only" data-i18n="kd.hint"></p>
-      </section>
-
-      <section class="card phone-card desk-only" id="phoneCard" hidden aria-labelledby="phoneTitle">
-        <div class="card-head">
-          <h2 id="phoneTitle" data-i18n="lan.title"></h2>
-          <button type="button" class="icon-btn sm" id="phoneHide" data-i18n-title="lan.hide" data-i18n-aria="lan.hide"><span aria-hidden="true">✕</span></button>
-        </div>
-        <div class="phone-row">
-          <img class="qr" id="phoneQr" alt="" width="116" height="116">
-          <div class="phone-txt">
-            <p class="hint" data-i18n="lan.scan"></p>
-            <a class="lan-url" id="phoneUrl" href="#" target="_blank" rel="noopener"></a>
-          </div>
-        </div>
-      </section>
-    </aside>
-  </main>
-
-  <!-- settings: a bottom sheet on phones, a side drawer on wide screens -->
-  <div class="sheet" id="sheet" hidden>
-    <div class="backdrop" id="sheetBackdrop"></div>
-    <aside class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
-      <div class="panel-head">
-        <h2 id="sheetTitle" data-i18n="settings.title"></h2>
-        <button type="button" class="icon-btn" id="closeSettings" data-i18n-aria="settings.close" data-i18n-title="settings.close">
-          <span aria-hidden="true">✕</span></button>
-      </div>
-      <div class="panel-body">
-        <section class="sec">
-          <h3 data-i18n="lang.label"></h3>
-          <div class="seg wide" id="langSeg">
-            <button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button>
-          </div>
-        </section>
-        <section class="sec">
-          <h3 data-i18n="sec.sending"></h3>
-          <button type="button" class="switch-row" id="sLive" role="switch" aria-checked="false">
-            <span class="txt"><b data-i18n="opt.live"></b><small data-i18n="opt.liveDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
-          <button type="button" class="switch-row" id="sTyping" role="switch" aria-checked="false">
-            <span class="txt"><b data-i18n="opt.typing"></b><small data-i18n="opt.typingDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
-          <button type="button" class="switch-row" id="sSfx" role="switch" aria-checked="false">
-            <span class="txt"><b data-i18n="opt.sfx"></b><small data-i18n="opt.sfxDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
-          <button type="button" class="switch-row" id="sEnter" role="switch" aria-checked="false">
-            <span class="txt"><b data-i18n="opt.enter"></b><small data-i18n="opt.enterDesc"></small></span><i class="sw" aria-hidden="true"></i></button>
-        </section>
-        <section class="sec" id="oscSec">
-          <h3 data-i18n="osc.title"></h3>
-          <p class="hint"><span data-i18n="osc.current"></span> <b id="oscNow">…</b> <span id="oscSrc" class="src"></span></p>
-          <form class="fields" id="oscForm" novalidate>
-            <label class="field grow"><span data-i18n="osc.host"></span>
-              <input id="oscHost" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
-            <label class="field port"><span data-i18n="osc.port"></span>
-              <input id="oscPort" type="number" inputmode="numeric" min="1" max="65535" required></label>
-            <p class="err" id="oscErr" role="alert" hidden></p>
-            <div class="row wrap">
-              <button type="submit" class="btn primary" data-i18n="osc.save"></button>
-              <button type="button" class="btn" id="oscReset" data-i18n="osc.reset"></button>
-            </div>
-          </form>
-          <p class="hint" data-i18n="osc.hint"></p>
-        </section>
-        <section class="sec" id="lanSec">
-          <h3 data-i18n="lan.title"></h3>
-          <p class="hint" id="lanNone" data-i18n="lan.none" hidden></p>
-          <div class="lan-box" id="lanBox" hidden>
-            <img class="qr" id="lanQr" alt="" width="148" height="148">
-            <div class="lan-list" id="lanList"></div>
-          </div>
-          <p class="hint" data-i18n="lan.hint"></p>
-        </section>
-        <section class="sec" id="trSec">
-          <h3 data-i18n="tr.title"></h3>
-          <p class="hint" data-i18n="tr.hint"></p>
-          <button type="button" class="switch-row" id="trOn" role="switch" aria-checked="false">
-            <span class="txt"><b data-i18n="tr.enable"></b></span><i class="sw" aria-hidden="true"></i></button>
-          <div id="trBox"></div>
-          <h4 class="sub" data-i18n="tr.models"></h4>
-          <p class="hint" data-i18n="tr.modelsHint"></p>
-          <div class="tr-models" id="trModels"></div>
-        </section>
-        <section class="sec" id="kdSec">
-          <h3 data-i18n="sec.kd"></h3>
-          <p class="hint" id="kdOffHint" data-i18n="kd.offHint"></p>
-          <div id="settings"></div>
-        </section>
-        <section class="sec" id="pwSec">
-          <h3 data-i18n="pw.title"></h3>
-          <p class="hint" id="pwState"></p>
-          <form class="fields" id="pwForm" novalidate>
-            <label class="field grow" id="pwCurWrap"><span data-i18n="pw.current"></span>
-              <input id="pwCur" type="password" autocomplete="current-password"></label>
-            <label class="field grow"><span data-i18n="pw.new"></span>
-              <input id="pwNew" type="password" autocomplete="new-password" minlength="4"></label>
-            <p class="err" id="pwErr" role="alert" hidden></p>
-            <div class="row wrap">
-              <button type="submit" class="btn primary" id="pwSave" data-i18n="pw.set"></button>
-              <button type="button" class="btn danger" id="pwRemove" data-i18n="pw.remove"></button>
-            </div>
-          </form>
-          <p class="hint" data-i18n="pw.hint"></p>
-        </section>
-        <section class="sec" id="srvSec">
-          <h3 data-i18n="srv.title"></h3>
-          <form class="fields" id="srvForm" novalidate>
-            <label class="field grow"><span data-i18n="srv.host"></span>
-              <input id="srvHost" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-            <label class="field port"><span data-i18n="srv.port"></span>
-              <input id="srvPort" type="number" inputmode="numeric" min="1" max="65535"></label>
-            <p class="err" id="srvErr" role="alert" hidden></p>
-            <div class="row wrap">
-              <button type="submit" class="btn" data-i18n="srv.save"></button>
-              <button type="button" class="btn ghost" id="srvReset" data-i18n="osc.reset"></button>
-            </div>
-          </form>
-          <p class="hint" id="srvHint" data-i18n="srv.hint"></p>
-          <p class="hint warn" id="srvRestart" data-i18n="srv.restart" hidden></p>
-        </section>
-        <section class="sec">
-          <h3 data-i18n="sec.about"></h3>
-          <p class="hint about">kdchat <b class="ver"></b> · MIT</p>
-          <div class="row wrap">
-            <a class="btn" href="/docs" target="_blank" rel="noopener"><span aria-hidden="true">📖</span><span data-i18n="hist.docs"></span></a>
-            <a class="btn" href="https://github.com/kurashizu/kdchat" target="_blank" rel="noopener">GitHub</a>
-          </div>
-        </section>
-      </div>
-    </aside>
-  </div>
-
-  <div class="toasts" id="toasts" aria-live="polite"></div>
-  <div class="dropzone" id="dropzone" data-i18n="kd.drop"></div>
-  <script src="/ui/i18n.js"></script>
-  <script src="/ui/app.js"></script>
-</body>
+					import("./_app/immutable/bundle.BIGm5__7.js").then((app) => {
+						app.start(element)
+					});
+				}
+			</script>
+		</div>
+  </body>
 </html>

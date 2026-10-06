@@ -24,3 +24,7 @@ settings.json
 settings.json.bad
 *.tmp
 preview.png
+
+# the console's sources (web/): dependencies and SvelteKit's generated files (the build itself, ui/, is committed)
+web/node_modules/
+web/.svelte-kit/

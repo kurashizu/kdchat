@@ -1,7 +1,7 @@
 """Local translation for kdchat: Mozilla's Firefox Translations models (MPL-2.0) on the CPU, inside this process.
 
-The Bergamot engine (WebAssembly, vendor/bergamot, the build Firefox ships) runs in an embedded V8 (mini-racer), so the
-same code works on every OS and nothing runs on the device you type on. Models are NOT bundled: the user downloads
+The Bergamot engine (WebAssembly, vendor/bergamot, the build Firefox ships) runs on the wasmtime runtime with a small
+Python host for its Emscripten glue (bergamot_wasm.py), so the same code works on every OS and nothing runs on the device you type on. Models are NOT bundled: the user downloads
 the languages they want; they come from kdchat's GitHub release (MODELS_TAG, mirrored unchanged from Mozilla, see
 tools/mirror_models.py) and are checked against the release's manifest (SHA-256). Every model translates between
 English and one language; other pairs go through English (one call, two models).
@@ -221,95 +221,50 @@ class Models:
 
 
 # ------------------------------------------------------------------ the engine
-_HARNESS = r"""
-var B = null, M = {}, SVC = null, PEND = {};
-var ALIGN = %s;
-function kd_alloc(n) { globalThis.__buf = new ArrayBuffer(n); return globalThis.__buf; }
-function kd_stash(name) { PEND[name] = globalThis.__buf; globalThis.__buf = null; return true; }
-function kd_init() {
-  return new Promise(function (res, rej) {
-    var b = loadBergamot({ INITIAL_MEMORY: 16777216, print: function () {}, printErr: function () {},
-      onAbort: function (e) { rej(new Error("engine abort " + e)); }, wasmBinary: new Uint8Array(PEND.wasm),
-      onRuntimeInitialized: function () { Promise.resolve().then(function () {
-        B = b; SVC = new b.BlockingService({ cacheSize: 0 }); delete PEND.wasm; res(true); }); } });
-  });
-}
-function kd_mem(name, kind) {
-  var buf = PEND[name], m = new B.AlignedMemory(buf.byteLength, ALIGN[kind]);
-  m.getByteArrayView().set(new Uint8Array(buf)); delete PEND[name]; return m;
-}
-function kd_load(pair, f) {
-  var vocabs = new B.AlignedMemoryList();
-  if (f.vocab) vocabs.push_back(kd_mem(f.vocab, "vocab"));
-  else { vocabs.push_back(kd_mem(f.srcvocab, "srcvocab")); vocabs.push_back(kd_mem(f.trgvocab, "trgvocab")); }
-  var cfg = { "beam-size": "1", normalize: "1.0", "word-penalty": "0", "max-length-break": "128",
-    "mini-batch-words": "1024", workspace: "%d", "max-length-factor": "2.0", "skip-cost": "true",
-    "cpu-threads": "0", quiet: "true", "quiet-translation": "true", "gemm-precision": f.gemm, alignment: "soft" };
-  var text = "\n"; for (var k in cfg) text += "            " + k + ": " + cfg[k] + "\n";
-  var st = pair.split("-");
-  if (M[pair]) M[pair].delete();
-  M[pair] = new B.TranslationModel(st[0], st[1], text + "            ", kd_mem(f.model, "model"),
-    f.lex ? kd_mem(f.lex, "lex") : null, vocabs, null);
-  return true;
-}
-function kd_unload(pair) { if (M[pair]) { M[pair].delete(); delete M[pair]; } return true; }
-function kd_translate(a, b, text) {
-  var msgs = new B.VectorString(), opts = new B.VectorResponseOptions();
-  msgs.push_back(text); opts.push_back({ qualityScores: false, alignment: false, html: false });
-  var r = b ? SVC.translateViaPivoting(M[a], M[b], msgs, opts) : SVC.translate(M[a], msgs, opts);
-  var out = r.get(0).getTranslatedText(); msgs.delete(); opts.delete(); r.delete(); return out;
-}
-function kd_heap() { return B ? B.HEAP8.length : 0; }
-"""
-
-
 class Engine:
-    """the Bergamot engine in an embedded V8; translate() loads the models it needs (and frees ones not used lately)"""
+    """the Bergamot engine (WebAssembly on wasmtime, bergamot_wasm.py); translate() loads the models it needs (and
+    frees ones not used lately). Not thread safe by itself: every call holds the lock."""
 
     WORKSPACE_MB = 32            # Marian's per-model scratch space (Firefox: 128); 32 keeps the heap small, same output
+    MAX_LOADED = 6               # translation directions kept in memory
 
     def __init__(self, models: Models):
         self.models = models
         self.lock = threading.Lock()
-        self.ctx = None
-        self.loaded = {}             # pair -> last use (monotonic)
+        self.b = None
+        self.loaded = {}             # pair -> (model handle, last use)
 
     def _start(self):
-        from py_mini_racer import MiniRacer
-        d = os.path.join(_here(), "vendor", "bergamot")
-        ctx = MiniRacer()
-        with open(os.path.join(d, "bergamot-translator.js"), encoding="utf-8") as f:
-            glue = f.read()
-        ctx.eval(glue + "\n" + _HARNESS % (json.dumps(_ALIGN), self.WORKSPACE_MB))
-        with open(os.path.join(d, "bergamot-translator.wasm"), "rb") as f:
-            self._put(ctx, "wasm", f.read())
-        ctx.eval("kd_init()").get(timeout=60)
-        self.ctx = ctx
+        from bergamot_wasm import Bergamot
+        with open(os.path.join(_here(), "vendor", "bergamot", "bergamot-translator.wasm"), "rb") as f:
+            self.b = Bergamot(f.read())
 
-    @staticmethod
-    def _put(ctx, name, data):
-        mv = ctx.eval(f"kd_alloc({len(data)})")        # (call() would send JSON: eval returns the buffer itself)
-        mv[:] = data
-        ctx.call("kd_stash", name)
+    def _config(self, gemm: str) -> str:
+        cfg = {"beam-size": "1", "normalize": "1.0", "word-penalty": "0", "max-length-break": "128",
+               "mini-batch-words": "1024", "workspace": str(self.WORKSPACE_MB), "max-length-factor": "2.0",
+               "skip-cost": "true", "cpu-threads": "0", "quiet": "true", "quiet-translation": "true",
+               "gemm-precision": gemm, "alignment": "soft"}
+        return "\n" + "".join(f"            {k}: {v}\n" for k, v in cfg.items()) + "            "
 
     def _ensure(self, pair):
         if pair in self.loaded:
-            self.loaded[pair] = time.monotonic()
-            return
+            self.loaded[pair] = (self.loaded[pair][0], time.monotonic())
+            return self.loaded[pair][0]
         d = self.models.pair_dir(pair)
         with open(os.path.join(d, "files.json")) as f:
             meta = json.load(f)
-        spec = {"gemm": meta["gemm"]}
+        data = {}
         for kind, name in meta["files"].items():
             with open(os.path.join(d, name), "rb") as f:
-                self._put(self.ctx, f"{pair}:{kind}", f.read())
-            spec[kind] = f"{pair}:{kind}"
-        self.ctx.call("kd_load", pair, spec)
-        self.loaded[pair] = time.monotonic()
-        while len(self.loaded) > 6:                     # keep at most 6 directions in memory
-            old = min(self.loaded, key=self.loaded.get)
-            self.ctx.call("kd_unload", old)
-            del self.loaded[old]
+                data[kind] = f.read()
+        vocabs = [data["vocab"]] if "vocab" in data else [data["srcvocab"], data["trgvocab"]]
+        src, tgt = pair.split("-")
+        m = self.b.model(src, tgt, self._config(meta["gemm"]), data["model"], data.get("lex"), vocabs, _ALIGN)
+        self.loaded[pair] = (m, time.monotonic())
+        while len(self.loaded) > self.MAX_LOADED:
+            old = min(self.loaded, key=lambda k: self.loaded[k][1])
+            self.b.free_model(self.loaded.pop(old)[0])
+        return m
 
     def ready(self, src: str, tgt: str) -> bool:
         return src == tgt or all(self.models.installed(l) for l in (src, tgt))
@@ -320,17 +275,15 @@ class Engine:
         if not self.ready(src, tgt):
             raise LookupError(f"model not downloaded: {src if not self.models.installed(src) else tgt}")
         with self.lock:
-            if self.ctx is None:
+            if self.b is None:
                 self._start()
             if src == "en" or tgt == "en":
-                a, b = f"{src}-{tgt}", None
-                self._ensure(a)
+                a, b = self._ensure(f"{src}-{tgt}"), None
             else:
-                a, b = f"{src}-en", f"en-{tgt}"
-                self._ensure(a); self._ensure(b)
+                a, b = self._ensure(f"{src}-en"), self._ensure(f"en-{tgt}")
             out = []
             for line in text.split("\n"):                 # the engine treats a message as text: keep the line breaks
-                out.append(self.ctx.call("kd_translate", a, b, line) if line.strip() else line)
+                out.append(self.b.translate(a, line, via=b) if line.strip() else line)
             return _tidy("\n".join(out), tgt)
 
 

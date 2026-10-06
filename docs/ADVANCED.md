@@ -21,20 +21,29 @@ Before 1.3.0 kdchat was called vrc-chatbox. The Windows app moves its old data f
 
 ## Settings
 
-Everything is in **Settings ⚙︎** (top right):
+**On the main screen** (the things you change while chatting):
 
-| Section | What |
+- **Outputs** (top right): the game chatbox and the Klaude display, each with its switch. Both can be on. Turning the
+  display off asks first (the screen leaves the avatar).
+- **Send to** (under the input): which of the outputs that are on get your messages, one or both; remembered. A message
+  you are typing goes where it is sent; once it shows live, the change applies to the next one.
+- **Translate** (under the input): off, or the languages your messages are translated into (`JA · EN`). It opens the
+  translation controls: on/off, up to two languages (picking one that is not downloaded starts its download), your
+  typing language, how many translations the game chatbox gets, the side screens.
+- **Live** (under the input): live typing on/off. **Fill keyboard**: put the text into VRChat's keyboard without sending.
+- **Klaude display** card: the preview (main screen and the open side screens), the side screens (Auto / Open / Off,
+  with which language goes where), the layout, chime, picture, clear. On phones the card folds.
+- **Messages**: tap one to edit it; the menu has send again and revert. Translations are shown under each message.
+
+**Settings** (the gear, top right; `#settings=<tab>` in the address opens a tab directly):
+
+| Tab | What |
 |---|---|
-| Language | English / 中文. The first visit follows the browser language; your choice is remembered (per browser). |
-| Sending | Live typing, typing indicator, sound on send, Enter sends. Remembered per browser. |
-| Use it on your phone | The LAN address(es) of this PC and a QR code. |
-| VRChat connection (OSC) | Where messages go: `127.0.0.1` port `9000` = VRChat on the same PC (the default). If VRChat runs on another PC, enter that PC's LAN IP. Applies at once. **Reset to default** goes back to the default (or the server's `VRC_HOST` / `VRC_PORT`). |
-| Klaude display | Options of the avatar display (only when it is turned on, 🖥 at the top). |
-| Password | Set, change or remove the password (changing or removing needs the current one). Stored as a salted hash. With a password, browsers ask for it (any user name); the app's own window does not. |
-| Server address | Listen address and HTTP port (default `0.0.0.0:5555`). `127.0.0.1` = this PC only. Applies after a restart. |
-
-The two buttons at the top turn the outputs on and off: 🎮 the game chatbox, 🖥 the Klaude display. Both can be on;
-when both are on, the 🎮 / 🖥 buttons next to the input choose where the next message goes.
+| General | Interface language (English / 中文; the first visit follows the browser, `?lang=zh` in the address too), appearance (system / light / dark), sending: live typing, typing indicator, sound on send, Enter sends. Remembered per browser. |
+| Display | Every option of the Klaude display: screen shape, layout, text size, size in VRChat, side screens, long messages and scroll speed (single layout), what to show (clock, date, message time, dividers, highlight, invert, full-screen pictures), colours, picture fit / screen / quality. |
+| Translation | The translation controls, the small font per language, the language packs (search, download, delete). |
+| Connection | VRChat connection (OSC): `127.0.0.1` port `9000` = VRChat on the same PC (the default), else that PC's LAN IP; applies at once; reset goes back to the default (or `VRC_HOST` / `VRC_PORT`). Phone access (LAN addresses + QR code). Password: set, change or remove (changing or removing needs the current one; stored as a salted hash; browsers ask for it with any user name, the app's own window does not). Server address: listen address and HTTP port (default `0.0.0.0:5555`, `127.0.0.1` = this PC only; after a restart). |
+| About | Version, licences, API docs. |
 
 Server-side settings are saved in `settings.json` (Windows app: `%APPDATA%\kdchat\`; from source: next to
 `app.py`), the outputs and display options in `state.json` next to it.
@@ -51,7 +60,9 @@ affected).
 - Live typing updates the message in place. Six screen sizes, a size slider, a "single message" layout that scrolls
   long text by itself.
 - Pictures: paste, drop or pick an image; it is cropped and enhanced. Two qualities: high (~70 s to transfer) and low
-  (2×2 pixel dots, ~20 s).
+  (2x2 pixel dots, ~20 s). The console reads every common format in the browser: JPEG, PNG, GIF, WebP, AVIF, BMP,
+  TIFF, SVG, ICO and HEIC / HEIF (phone photos; their decoders load only when such a file comes), upright by its EXIF
+  orientation.
 - `kd_display/` is the display driver ([KD_DRIVER.md](KD_DRIVER.md)). Its `config.json` **must match the uploaded avatar
   version** (otherwise the screen stays black or shows garbage). When both change, upload the avatar first, then update this.
 - The avatar: [Klaude on VRChat](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136).
@@ -68,8 +79,9 @@ every screen scrolling on its own; the single layout shows the newest translatio
 written in the display's 5x7 font, main log and side screens; default `["en"]`; `GET` lists the allowed ones in
 `small_ok`).
 
-The engine is Mozilla's Firefox Translations (Bergamot, WebAssembly) running inside kdchat through an embedded V8
-(mini-racer), on the CPU of the machine that runs kdchat: a server deployment translates on the server. Models are
+The engine is Mozilla's Firefox Translations (Bergamot, WebAssembly) running inside kdchat on the
+[wasmtime](https://wasmtime.dev/) runtime (`bergamot_wasm.py` is the small host it needs: the Emscripten runtime and
+embind bindings in Python), on the CPU of the machine that runs kdchat: a server deployment translates on the server. Models are
 downloaded per language on request from the GitHub release `models-2026.10` (a mirror of Mozilla's models, see
 `tools/mirror_models.py`) into `<data folder>/models/`, checked with SHA-256. Every model translates to or from
 English; other pairs go through English. Two loaded directions take about 0.7 GB of memory; a message takes about
@@ -192,7 +204,7 @@ Everything is under `/api/v1`. With a password: HTTP Basic auth (any user name).
 | `GET` | `/network`, `/network/qr.svg?url=…` | LAN URLs of the console / a QR code (SVG, made locally) |
 | `GET` / `PUT` | `/kd/settings` | Klaude display options |
 | `POST` | `/kd/chime`, `/kd/clear` | Display: chime / clear |
-| `POST` / `DELETE` | `/kd/image` | Display: show a picture (the body is the image file) / close it |
+| `POST` / `DELETE` | `/kd/image` | Display: show a picture / close it (body: see below) |
 | `GET` | `/kd/status`, `/kd/preview.png` | Display: sending status / preview |
 
 Examples:
@@ -212,7 +224,12 @@ final message is sent at once.
 
 Translation: `GET /api/v1/translate` (settings + every language with its download state), `PUT /api/v1/translate`,
 `POST /api/v1/translate/models/{code}` (download, progress in `GET /api/v1/translate`), `DELETE …/models/{code}`,
-`POST /api/v1/translate/try {"text"}` (translate without sending). Pictures: `POST /api/v1/kd/image` (main screen).
+`POST /api/v1/translate/try {"text"}` (translate without sending).
+
+Pictures: `POST /api/v1/kd/image` (main screen, body at most 10 MB) takes raw RGB: `KDRGB1`, width and height (2 bytes
+each, big endian, at most 1024), then width x height x 3 bytes (rows top to bottom), already upright, transparency on
+black (what the console sends after decoding the file in the browser). An image file (JPEG, PNG, ...) works too when
+Pillow is installed on the server (`uv sync --extra images`; the Windows `.exe` does without it).
 
 ## Troubleshooting
 
@@ -230,16 +247,17 @@ Translation: `GET /api/v1/translate` (settings + every language with its downloa
 ## Development and tests
 
 ```bash
-uv sync                       # includes the dev tools (pytest, httpx)
-uv run pytest                 # config, auth, OSC target (real UDP packets on 127.0.0.1), API, desktop launcher
-node tests/js_check.mjs       # UI: JavaScript syntax, en/zh strings complete (plain node, nothing to install)
+uv sync                       # includes the dev tools (pytest, httpx, Pillow for the tests)
+uv run pytest                 # config, auth, OSC (real UDP packets), API, display, translation engine, pictures, UI build
 ```
 
 - `app.py` server and API · `kdchat_config.py` settings / precedence / passwords · `netinfo.py` LAN addresses ·
-  `desktop.py` the Windows app · `kd_chat.py` + `kd_display/` the Klaude display · `ui/` the console (plain
-  HTML/CSS/JS, no build step; strings in `ui/i18n.js`) · `version.py` the version (single source).
-- The UI keeps all text in `ui/i18n.js` (one dictionary per language). Add a key to both `en` and `zh`; the JS check
-  fails on missing keys.
+  `desktop.py` the Windows app · `kd_chat.py` + `kd_display/` the Klaude display · `imgproc.py` pictures ·
+  `translate.py` + `bergamot_wasm.py` translation · `version.py` the version (single source).
+- The console: `web/` (SvelteKit, static, [shadcn-svelte](https://shadcn-svelte.com/) components, Lucide icons),
+  built into `ui/`, which is committed (the server and the `.exe` need no Node). After changing `web/`:
+  `cd web && npm ci && npm run build`. While working on it: run kdchat on port 5599 and `npm run dev` (it forwards
+  `/api` there). All text is in `web/src/lib/i18n.svelte.ts` (`en` + `zh`); no emoji in the UI (icons are SVG).
 - Windows build locally: `uv sync --group build` then `uv run pyinstaller packaging/kdchat.spec --noconfirm --clean`
   → `dist/kdchat.exe`. The icon is made by `uv run python packaging/make_icon.py`.
 - CI (`.github/workflows/ci.yml`) runs the tests on Ubuntu and Windows for every push and pull request.

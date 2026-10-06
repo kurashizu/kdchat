@@ -3,6 +3,34 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-10-07
+
+A new console and a much smaller app.
+
+### Changed
+- **The console is rebuilt** (SvelteKit + shadcn-svelte, SVG icons, light / dark / system). The main screen has what
+  you use while chatting: the two outputs with their switches at the top; under the input "Send to" (one or both of
+  the outputs that are on, remembered), **Translate** (shows the languages, opens the translation controls: on/off,
+  up to two languages - picking one that is not downloaded starts its download -, typing language, chatbox, side
+  screens), Live and Fill keyboard; the display card with the preview, the side screens (Auto / Open / Off and which
+  language goes where), the layout, chime, picture, clear (it folds on phones). Translations are shown under each
+  message; edit / send again / revert are in each message's menu. Settings are sorted into tabs: General, Display,
+  Translation (with the language packs), Connection (VRChat, phone, password, server address), About. Confirmations
+  are dialogs, no more browser pop-ups.
+- A message being typed can still be sent elsewhere until it shows live (too long for the game chatbox? send it to the
+  display only); editing a message and tapping another one switches when nothing was changed yet.
+- **Pictures of every common format**: JPEG, PNG, GIF, WebP, AVIF, BMP, TIFF, SVG, ICO and HEIC / HEIF phone photos
+  (decoded in the browser, upright by their EXIF orientation; the HEIC and TIFF decoders load only when needed).
+- **Smaller download**: the translation engine runs on wasmtime instead of an embedded V8 (same output, starts in
+  0.4 s); the server needs no image library (the console sends pictures as raw RGB; image files still work through the
+  API with Pillow installed) and no psutil; the fallback window without WebView2 is a native message box. The
+  `.exe` is about a third smaller.
+- The typing indicator goes off by itself 15 s after the last word from the console (a closed page or a lost
+  connection no longer leaves "typing" on), and at once when the page closes.
+
+### Removed
+- The old console (`ui/app.js`, `ui/i18n.js`); its URLs `/ui/...` are gone (the console loads from `/_app/...`).
+
 ## [1.7.0] - 2026-10-07
 
 ### Added
@@ -126,7 +154,7 @@ A cleaner console: the same features, better organised, on computers and phones.
 ### Changed
 - Composer: the input, then one line with the status and the counter, then the quick toggles (where to send, Live,
   Fill keyboard) on the left and Cancel + Send on the right. The send button just says **Send**; where the message goes
-  is shown by the 🎮 / 🖥 buttons next to it. The line count only appears once there is more than one line.
+  is shown by the chatbox / display buttons next to it. The line count only appears once there is more than one line.
 - Wide screens: the display and **Use it on your phone** sit in a side column next to the input and the history; the
   display stays in view while you scroll.
 - **Recent messages**: **Clear** is now in the list header (was in Settings); the "Game / Display" tag only appears

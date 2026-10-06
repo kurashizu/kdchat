@@ -20,9 +20,11 @@ def test_no_password_no_login(make_client):
     assert c.get("/api/v1/info").json()["auth"]["enabled"] is False
     r = c.get("/")
     assert r.status_code == 200 and "<html" in r.text
-    assert c.get("/ui/app.js").status_code == 200
-    assert c.get("/ui/i18n.js").status_code == 200
-    assert c.get("/ui/nope.js").status_code == 404
+    js = next(f for f in os.listdir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "_app", "immutable")) if f.endswith(".js"))
+    assert c.get(f"/_app/immutable/{js}").status_code == 200
+    assert c.get("/_app/immutable/nope.js").status_code == 404
+    assert c.get("/_app/../app.py").status_code == 404
+    assert c.get("/icon.svg").status_code == 200
 
 
 def test_env_password_required(make_client):

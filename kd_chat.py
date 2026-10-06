@@ -28,6 +28,8 @@ import time
 import zlib
 from datetime import datetime
 
+import imgproc
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "kd_display"))
 
@@ -166,32 +168,20 @@ def _d2(a, b):
     return 2 * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + 3 * (a[2] - b[2]) ** 2
 
 
-def prepare_image(data: bytes, gw: int, gh: int, top: int, fit: str):
-    """picture bytes -> RGB image gw x gh graphics px: black header band of `top` rows, the picture below it
-    (cover: fill + crop, slightly above centre; contain: whole picture), contrast / colour / sharpness lifted"""
-    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
-    im = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
-    if im.mode in ("RGBA", "LA", "P", "PA"):
-        im = Image.alpha_composite(Image.new("RGBA", im.size, (0, 0, 0, 255)), im.convert("RGBA"))
-    im = im.convert("RGB")
-    box = (gw, gh - top)
-    im = ImageOps.contain(im, box, Image.LANCZOS) if fit == "contain" else \
-        ImageOps.fit(im, box, Image.LANCZOS, centering=(0.5, 0.42))
-    im = ImageOps.autocontrast(im, cutoff=1.5, preserve_tone=True)   # one stretch for all channels: no colour cast
-    im = ImageEnhance.Color(im).enhance(1.3)
-    im = im.filter(ImageFilter.UnsharpMask(radius=1, percent=50, threshold=3))
-    out = Image.new("RGB", (gw, gh), (0, 0, 0))
-    out.paste(im, ((gw - im.width) // 2, top + (gh - top - im.height) // 2))
+def prepare_image(src: "imgproc.Img", gw: int, gh: int, top: int, fit: str) -> "imgproc.Img":
+    """a picture -> RGB image gw x gh graphics px: black header band of `top` rows, the picture below it (cover: fill +
+    crop, slightly above centre; contain: whole picture), contrast / colour / sharpness lifted"""
+    im = imgproc.fit(src, (gw, gh - top), fit)
+    im = imgproc.sharpen(imgproc.color(imgproc.autocontrast(im, 1.5), 1.3), 0.5, 3)
+    out = imgproc.Img(gw, gh)
+    out.paste(im, (gw - im.w) // 2, top + (gh - top - im.h) // 2)
     return out
 
 
-def adaptive_palette(img, base, keep):
+def adaptive_palette(img: "imgproc.Img", base, keep):
     """the palette with the indices in `keep` unchanged, every other entry a colour of the picture (median cut)"""
-    from PIL import Image
     free = [i for i in range(len(base)) if i not in keep]
-    q = img.quantize(colors=len(free) + 4, method=Image.Quantize.MEDIANCUT)
-    pal = q.getpalette()
-    cols = [tuple(pal[3 * i:3 * i + 3]) for _, i in sorted(q.getcolors(), reverse=True)]
+    cols = [c for c, _ in imgproc.median_cut(img, len(free) + 4)]
     cols = [c for c in cols if min(_d2(c, base[k]) for k in keep) > 300]     # the UI colours already cover these
     out = list(base)
     for i, c in zip(free, cols):
@@ -262,12 +252,10 @@ def quantize(img, palette, per_tile=4, tile=8, strength=0.55):
     return out
 
 
-def best_size(data: bytes, top: int = 0) -> int:
+def best_size(src: "imgproc.Img", top: int = 0) -> int:
     """index of the screen size whose picture area (below `top` px) is closest to the picture's aspect ratio"""
     import math
-    from PIL import Image, ImageOps
-    with Image.open(io.BytesIO(data)) as im:
-        iw, ih = ImageOps.exif_transpose(im).size
+    iw, ih = src.size
     err = lambda wh: abs(math.log((iw / ih) / (wh[0] / (wh[1] - top)))) if wh[1] > top else 9.0
     return min(range(len(_SIZES)), key=lambda i: err(_SIZES[i]))
 
@@ -645,8 +633,9 @@ class KdChat:
         screen ("left" / "right"). Pictures on side screens share the graphics memory: then every picture uses the
         low-resolution mode (2x2 px dots) and all of them one palette."""
         sid = 0 if screen == "main" else SIDES[screen]
+        src = imgproc.load(data)                       # (ValueError: not a picture / no decoder for it)
         with self.lock:
-            self.img_src[sid] = data
+            self.img_src[sid] = src
         self._prepare_images()
         with self.lock:
             self._full = True
@@ -682,10 +671,9 @@ class KdChat:
         if len(imgs) == 1:
             joint = next(iter(imgs.values()))
         else:                                                     # one palette for all: picked from all of them
-            from PIL import Image
-            joint = Image.new("RGB", (gw * len(imgs), gh))
+            joint = imgproc.Img(gw * len(imgs), gh)
             for i, im in enumerate(imgs.values()):
-                joint.paste(im, (i * gw, 0))
+                joint.paste(im, i * gw, 0)
         pal = adaptive_palette(joint, self.base_palette, keep)
         idx = {k: quantize(im, pal, per_tile=c.colors_per_tile) for k, im in imgs.items()}
         with self.lock:

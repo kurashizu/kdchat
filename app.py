@@ -76,9 +76,9 @@ RUNTIME: dict = {"listen_host": None, "listen_port": None}     # what main() / t
 _server_at_start: dict = {}                                     # the configured address when the server started
 SESSION_TOKEN: Optional[str] = None     # set by the desktop app: its own window gets in without the password
 SESSION_COOKIE = "kdchat_session"
-UI_DIR = os.path.join(cfg.app_dir(), "ui")
-UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascript", "app.css": "text/css",
-            "icon.svg": "image/svg+xml"}
+UI_DIR = os.path.join(cfg.app_dir(), "ui")     # the console: a static SvelteKit build (web/ -> npm run build)
+UI_TYPES = {".js": "application/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json",
+            ".png": "image/png", ".woff2": "font/woff2"}
 
 
 # ==================== FastAPI app ====================
@@ -879,16 +879,34 @@ def clear_messages() -> Response:
     return Response(status_code=204)
 
 
-@api.put("/typing", response_model=TypingState, tags=["typing"], summary="Set the typing indicator")
-def set_typing(state: TypingState, user: str = AuthDep) -> TypingState:
-    """OSC: `/chatbox/typing <bool>` (and the display's 'typing..')."""
+TYPING_TTL = 15.0               # s: the indicator goes off unless renewed (a closed page / lost connection never sticks)
+_typing_timer: Optional[threading.Timer] = None
+
+
+def _typing_apply(on: bool, targets: Optional[list[str]] = None) -> None:
     global _typing_state
-    _typing_state = bool(state.typing)
-    use = _use(state.targets)
+    _typing_state = bool(on)
+    use = _use(targets)
     if _kd is not None and _outputs["kd"]:
         _kd.set_typing(_typing_state and use["kd"])            # (off where this text does not go)
     if _outputs["chatbox"]:
         _chatbox_typing(_typing_state and use["chatbox"])
+
+
+@api.put("/typing", response_model=TypingState, tags=["typing"], summary="Set the typing indicator")
+def set_typing(state: TypingState, user: str = AuthDep) -> TypingState:
+    """OSC: `/chatbox/typing <bool>` (and the display's 'typing..'). On lasts TYPING_TTL (15) s: send it again to
+    keep it on (the console does every 5 s while you type)."""
+    global _typing_timer
+    _use(state.targets)                                        # (400 on bad targets before anything changes)
+    _typing_apply(state.typing, state.targets)
+    if _typing_timer is not None:
+        _typing_timer.cancel()
+        _typing_timer = None
+    if state.typing:
+        _typing_timer = threading.Timer(TYPING_TTL, lambda: _typing_apply(False))
+        _typing_timer.daemon = True
+        _typing_timer.start()
     log.debug("typing: %s user=%s", _typing_state, user)
     return TypingState(typing=_typing_state)
 
@@ -1256,13 +1274,21 @@ def landing(request: Request, session: Optional[str] = None,
     return HTMLResponse(_read_ui("index.html"), headers={"Cache-Control": "no-store"})
 
 
-@app.get("/ui/{name}", include_in_schema=False, dependencies=[AuthDep])
-def ui_file(name: str) -> Response:
-    if name not in UI_FILES:
+@app.get("/_app/{path:path}", include_in_schema=False, dependencies=[AuthDep])
+def ui_asset(path: str) -> Response:
+    """the console's scripts and styles (ui/_app/...); hashed file names under immutable/ never change"""
+    root = os.path.realpath(os.path.join(UI_DIR, "_app"))
+    f = os.path.realpath(os.path.join(root, path))
+    ext = os.path.splitext(f)[1]
+    if not f.startswith(root + os.sep) or not os.path.isfile(f) or ext not in UI_TYPES:
         raise HTTPException(status_code=404)
-    return Response(_read_ui(name), media_type=UI_FILES[name] + "; charset=utf-8", headers={"Cache-Control": "no-store"})
+    with open(f, "rb") as fh:
+        data = fh.read()
+    cache = "public, max-age=31536000, immutable" if path.startswith("immutable/") else "no-store"
+    return Response(data, media_type=UI_TYPES[ext], headers={"Cache-Control": cache})
 
 
+@app.get("/icon.svg", include_in_schema=False)
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     return Response(_read_ui("icon.svg"), media_type="image/svg+xml")
@@ -1293,7 +1319,7 @@ def _render_docs_html() -> str:
  .get {{ background: #1f3b2c; color: #7fe0a0; }} .post {{ background: #3b2f1f; color: #ffc27a; }}
  .put, .patch {{ background: #1f2c3b; color: #8ac4ff; }} .delete {{ background: #3b1f1f; color: #ff9a9a; }}
 </style></head><body>
-<h1>🍳 kdchat API</h1>
+<h1>kdchat API</h1>
 <p class="sub">v{__version__} · HTTP → OSC for the VRChat chatbox · <a href="/">console</a> · <a href="/swagger">Swagger UI</a> ·
 <a href="/redoc">ReDoc</a> · <a href="/openapi.json">OpenAPI JSON</a></p>
 <h2>Quick start</h2>

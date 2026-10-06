@@ -1,7 +1,8 @@
 """kdchat desktop app (the Windows .exe): starts the server and opens the console in its own window.
 
-- The window uses the system's Edge WebView2 (pywebview). Without WebView2 (or pywebview) the console opens in the
-  default browser and a small window keeps the server running; closing either window stops the server.
+- The window uses the system's Edge WebView2 runtime (pywebview); closing it stops the server. Without WebView2 (or
+  pywebview) the console opens in the default browser and a small message box keeps the server running: its OK
+  button stops it (no other GUI toolkit is bundled).
 - The app's own window gets in without the password (a per-run session token), browsers on your phone still need it.
 - Already running (the port answers like kdchat)? Then the running console is opened instead.
 - No console window in the .exe: the log goes to kdchat.log in the data folder (%APPDATA%\\kdchat).
@@ -49,14 +50,6 @@ def _message(title: str, text: str) -> None:
             return
         except Exception:      # noqa: BLE001
             pass
-    try:
-        import tkinter
-        from tkinter import messagebox
-        root = tkinter.Tk(); root.withdraw()
-        messagebox.showerror(title, text)
-        root.destroy()
-    except Exception:          # noqa: BLE001
-        pass
 
 
 def _already_running(port: int) -> bool:
@@ -102,7 +95,7 @@ def _open_window(url: str, title: str) -> bool:
         logging.getLogger("kdchat").warning("no pywebview (%s): opening the browser instead", e)
         return False
     try:
-        webview.create_window(title, url, width=1120, height=820, min_size=(360, 560), background_color="#101218")
+        webview.create_window(title, url, width=1180, height=840, min_size=(360, 560), background_color="#0c0a09")
         webview.start(gui="edgechromium" if os.name == "nt" else None, private_mode=False,
                       storage_path=os.path.join(_data_dir(), "webview"))
         return True
@@ -116,36 +109,25 @@ def _data_dir() -> str:
     return cfg.data_dir()
 
 
-def _fallback_window(url: str, lan: list[str], log_path: str) -> None:
-    """no WebView2: open the browser, keep a small window; closing it stops the server"""
+def _fallback_window(url: str, lan: list[str]) -> None:
+    """no WebView2: the default browser + a message box (Windows) whose OK stops the server; elsewhere: until Ctrl+C"""
     webbrowser.open(url)
-    try:
-        import tkinter
-        from tkinter import ttk
-    except Exception:          # noqa: BLE001
-        while True:                                      # no GUI at all: run until killed
-            time.sleep(3600)
-    root = tkinter.Tk()
-    root.title("kdchat")
-    root.resizable(False, False)
     try:
         from version import __version__
     except Exception:          # noqa: BLE001
         __version__ = ""
-    f = ttk.Frame(root, padding=16)
-    f.grid()
-    ttk.Label(f, text=f"kdchat {__version__} is running", font=("Segoe UI", 12, "bold")).grid(sticky="w")
-    ttk.Label(f, text="Console: " + url.split("?")[0]).grid(sticky="w", pady=(8, 0))
-    for u in lan:
-        ttk.Label(f, text="On your phone: " + u).grid(sticky="w")
-    ttk.Label(f, text="Closing this window stops kdchat.", foreground="#666").grid(sticky="w", pady=(8, 8))
-    b = ttk.Frame(f)
-    b.grid(sticky="w")
-    ttk.Button(b, text="Open in browser", command=lambda: webbrowser.open(url)).grid(row=0, column=0, padx=(0, 8))
-    open_log = (lambda: os.startfile(log_path)) if os.name == "nt" else (lambda: webbrowser.open("file://" + log_path))
-    ttk.Button(b, text="Open log", command=open_log).grid(row=0, column=1, padx=(0, 8))
-    ttk.Button(b, text="Quit", command=root.destroy).grid(row=0, column=2)
-    root.mainloop()
+    if os.name == "nt":
+        import ctypes
+        text = (f"kdchat {__version__} is running.\n\nConsole: {url.split('?')[0]}\n"
+                + "".join(f"On your phone: {u}\n" for u in lan) + "\nPress OK to stop kdchat.")
+        ctypes.windll.user32.MessageBoxW(None, text, "kdchat", 0x40)      # (MB_ICONINFORMATION; blocks)
+        return
+    print(f"kdchat {__version__} is running: {url.split('?')[0]} (Ctrl+C stops it)")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         from version import __version__
         if not _open_window(url, f"kdchat {__version__}"):
             import netinfo
-            _fallback_window(url, netinfo.urls(host, port), log_path)
+            _fallback_window(url, netinfo.urls(host, port))
     finally:
         server.should_exit = True                        # window closed: stop the server cleanly
         th.join(timeout=8)

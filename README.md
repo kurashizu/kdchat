@@ -11,8 +11,9 @@ it also shows your messages on the pixel display above Klaude's head.
 <img src="docs/screenshot-desktop.png" alt="The console on a PC" width="800">
 
 - Type on your phone, read it in VRChat. Live typing and the "typing…" bubble included.
+- Translation into up to two languages, on your own computer.
 - Edit or take back what you sent, resend from the history.
-- English and 简体中文.
+- English and 简体中文, light and dark.
 - Optional password. Free and open source (MIT).
 
 ## Get started (Windows)
@@ -33,15 +34,15 @@ Closing the window stops kdchat.
 2. Scan the QR code in the kdchat window (**Use it on your phone**) with your phone's camera.
 3. Tip: add the page to your home screen to open it like an app.
 
-Anyone on your network can use the console until you set a password (**Settings ⚙︎ → Password**). At home that is
-usually fine; on a shared network, set one.
+Anyone on your network can use the console until you set a password (**Settings → Connection → Password**). At home
+that is usually fine; on a shared network, set one.
 
 ## The Klaude display
 
-Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136)? Turn on 🖥 at the top of
-the console: your messages show up as a chat log on the display above your head, with the time, a typing indicator and
-pictures you paste in. Everyone around you sees it, including people who join later. With any other avatar, leave 🖥
-off.
+Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136)? Turn on **Display** at the
+top of the console: your messages show up as a chat log on the display above your head, with the time, a typing
+indicator and pictures you paste in (any common format, phone photos included). Everyone around you sees it, including
+people who join later. With any other avatar, leave it off.
 
 **Side screens** unfold from the display when translation is on, one per translation language: each shows the chat
 in its language with every message's time, scrolling on its own. Latin-script languages can use the display's small
@@ -49,10 +50,10 @@ font (default: English), so longer translations fit.
 
 ## Translation
 
-Settings → **Translation**: pick up to two languages and download them (about 85 MB each, once). Every message you
-send is then translated on your own computer (nothing goes online): the game chatbox shows the original plus the
-translations that fit, and the Klaude display shows the whole chat translated on its side screens. Your typing language is
-detected automatically.
+Tap **Translate** under the input box, switch it on and add up to two languages (each downloads once, about 50-90 MB).
+Every message you send is then translated on your own computer (nothing goes online): the game chatbox shows the
+original plus the translations that fit, and the Klaude display shows the chat translated on its side screens. Your
+typing language is detected automatically. Language packs and the rest: **Settings → Translation**.
 
 Want to put your own things on the display (a clock, now playing, games)? The display driver is in this repository:
 see [docs/KD_DRIVER.md](docs/KD_DRIVER.md) and `examples/hello_kd.py`.

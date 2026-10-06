@@ -28,5 +28,11 @@ jobs:
         run: uv sync --locked
       - name: pytest
         run: uv run pytest -q
-      - name: UI JavaScript check
-        run: node tests/js_check.mjs
+      - name: "Console: the committed build (ui/) matches web/"
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          git status --porcelain -- ../ui
+          test -z "$(git status --porcelain -- ../ui)" || { echo "ui/ is out of date: cd web && npm run build, commit"; exit 1; }
