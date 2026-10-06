@@ -23,7 +23,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "26"     # (the npm that wrote web/package-lock.json)
       - name: Install (project env, locked)
         run: uv sync --locked
       - name: pytest

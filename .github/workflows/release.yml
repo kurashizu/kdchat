@@ -56,7 +56,7 @@ jobs:
             if (-not $js) { throw "the console page has no script" }
             Invoke-WebRequest "http://127.0.0.1:5599/$js" -UseBasicParsing | Out-Null
             # a picture in the console's raw format (no Pillow in the .exe)
-            $raw = [byte[]](75,68,82,71,66,49,0,4,0,4) + [byte[]](,128 * 48)
+            [byte[]]$raw = @(75,68,82,71,66,49,0,4,0,4) + @(128) * 48      # "KDRGB1", 4 x 4 px, grey
             Invoke-RestMethod -Method Post -ContentType application/octet-stream -Body $raw http://127.0.0.1:5599/api/v1/kd/image | Out-Null
             Invoke-WebRequest "http://127.0.0.1:5599/api/v1/network/qr.svg?url=http://x/" -UseBasicParsing | Out-Null
             # translation in the frozen app: download a language from the models release, translate one sentence
