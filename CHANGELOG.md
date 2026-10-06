@@ -3,6 +3,24 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-10-07
+
+Three screens, one chat. **Needs the Klaude avatar of 2026-10-07 01:40 or later** (the display's text memory grew).
+
+### Changed
+- **The side screens mirror the chat log.** With translation on, each side screen shows the whole log in its
+  language, line by line in step with the main screen: they scroll together (the same scroll registers), every message
+  takes the rows of its longest language on all three, highlight and colours match. The side screens' top bar shows
+  their language instead of repeating the clock and date.
+- The display's text memory is 1,530 bytes (was 630): each screen gets 8 line slots, so the main log no longer starts
+  lower than the top bar when translation is on (1.4.0 cut scrolling messages off in the middle of the screen).
+- Pictures are shown on the main screen only (the "Show on" choice is gone).
+- Translations into Latin-script languages use plain quotes and dashes (curly ones are full-width glyphs on the display).
+
+### Added
+- Driver: moving text on side screens (`move=True` with `screen=`): it moves with the main screen's text registers;
+  register `wing_mv`.
+
 ## [1.4.0] - 2026-10-07
 
 Translation, and the Klaude display's two side screens. **Needs the Klaude avatar of 2026-10-07 or later** (older

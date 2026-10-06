@@ -332,8 +332,15 @@ class Engine:
 _FULLWIDTH = {",": "，", "!": "！", "?": "？", ":": "：", ";": "；", "(": "（", ")": "）"}
 
 
+_ASCII_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-",
+                               "\u2026": "..."})
+
+
 def _tidy(s: str, lang: str) -> str:
-    """CJK output with the half-width punctuation the models sometimes produce -> full width"""
+    """CJK output with the half-width punctuation the models sometimes produce -> full width; other languages: curly
+    quotes / dashes -> ASCII (the display's font has those only as full-width glyphs)"""
+    if lang not in ("zh", "zh_hant", "ja", "ko"):
+        s = s.translate(_ASCII_QUOTES)
     if lang in ("zh", "zh_hant", "ja"):
         out = []
         for i, ch in enumerate(s):

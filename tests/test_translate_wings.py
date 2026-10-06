@@ -29,6 +29,7 @@ def test_tidy_full_width():
     assert tr._tidy("你好,世界!", "zh") == "你好，世界！"
     assert tr._tidy("A, B", "en") == "A, B"
     assert tr._tidy("v1.4, ok", "ja").startswith("v1.4")
+    assert tr._tidy("I\u2019ll \u201cgo\u201d", "en") == 'I\'ll "go"'
 
 
 def _wing_regs(d):
@@ -49,7 +50,8 @@ def test_wing_text_regions_with_page_items():
     r = d.present()
     assert len(d.mem.buf) == before and r["dropped"] == 0
     regs = _wing_regs(d)
-    assert regs["show"] == 3 and regs["wing_tl"] == 15 and regs["wing_tr"] == 18
+    total = d.cfg.text_bytes // d.cfg.P
+    assert regs["show"] == 3 and regs["wing_tl"] == total - 6 and regs["wing_tr"] == total - 3
     assert d.mem.buf[d.cfg.regs["size"]] != 0                  # a register written after the text, not shifted
     assert wings_open(d.mem)
     lit = lambda img: sum(1 for row in img for p in row if sum(p) > 1.5)
@@ -129,3 +131,29 @@ def test_language_list_offline(make_client):
     r = c.get("/api/v1/translate")
     assert any(l["code"] == "en" and l["state"] == "ready" for l in r.json()["languages"])
     assert c.post("/api/v1/translate/models/xx").status_code == 404
+
+
+def test_mirrored_logs(make_client, monkeypatch):
+    """chat layout + translations: the side screens show the log translated, row by row in step with the main one"""
+    c = make_client()
+    a = c.app_module
+    monkeypatch.setattr(a, "_tr_engine", FakeEngine())
+    c.put("/api/v1/outputs", json={"chatbox": False, "kd": True})
+    c.put("/api/v1/translate", json={"enabled": True, "targets": ["ja", "en"], "kd": True})
+    k = a._kd
+    assert k.mirror() and k.wing_lang == ["ja", "en"] and k.wing_label[0].startswith("JA  JAPANESE")
+    for t in ("你好", "今天天气不错"):
+        c.post("/api/v1/messages", json={"text": t})
+    with k.lock:                                                   # (ticks would first send the whole memory)
+        k._full = True
+        k._step()
+    d = k.d
+    regs = _wing_regs(d)
+    assert regs["show"] == 3 and regs["wing_tl"] and regs["wing_tr"]
+    assert d.mem.buf[d.cfg.regs["wing_mv"]] == 0x11               # each wing: header page, then the moving log
+    wing_items = [i for i in d.items if str(i).startswith("w1s") and d.items[i]]
+    assert wing_items, "no translated log lines on the left screen"
+    m = k.msgs[-1]
+    assert m["h"] >= m["gap"] + len(m["wl"][2]) * k.lh            # the row height covers the longest language
+    with pytest.raises(ValueError):
+        k.show_image(b"x", "left")                                 # pictures: main screen only

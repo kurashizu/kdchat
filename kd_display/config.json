@@ -65,9 +65,9 @@
   },
 
   "text": {
-    "area_bytes": 630,
-    "max_glyphs": 360,
-    "max_runs": 64,
+    "area_bytes": 1530,
+    "max_glyphs": 480,
+    "max_runs": 128,
     "len_bits": 5,
     "font_dir": "fonts",
     "font_files": ["fusion-pixel-12px-monospaced-zh_hans.bdf", "fusion-pixel-12px-monospaced-ja.bdf", "fusion-pixel-12px-monospaced-zh_hant.bdf"],
@@ -93,7 +93,7 @@
   "registers": ["flags", "gfx_mode", "gfx_x", "gfx_y", "text_x", "text_y", "mono",
                 "gfx_vx", "gfx_vy", "text_vx", "text_vy", "fx", "cycle", "timing", "blink_view", "win_x", "win_y",
                 "shape_y", "sumG_hi", "sumG_lo", "sumT_hi", "sumT_lo", "sumH_hi", "sumH_lo", "text_wrap_x", "text_wrap_y", "text_move", "text_clip_y0", "text_clip_y1", "screen", "sumI_hi", "sumI_lo", "sumJ_hi", "sumJ_lo", "sumK_hi", "sumK_lo", "show", "size", "shape_x", "shape_vx", "shape_vy",
-                "wing_tl", "wing_tr", "wing_gl", "wing_gr", "wing_shp", "wing_spr"],
+                "wing_tl", "wing_tr", "wing_gl", "wing_gr", "wing_shp", "wing_spr", "wing_mv"],
   "_registers_doc": "STATE registers (late joiners get them from the refresh like any page): flags 1 on, 2 invert, 4 graphics, 8 text, 16 mono, 32 photo dither, 64 sprites, 128 window | gfx_mode 0 raw 1 photo | gfx_x/gfx_y, text_x/text_y: layer offset in screen pixels (content moves by +offset, wraps; graphics at zoom 1 units) | mono fg<<4|bg | gfx_vx..text_vy: auto-scroll, signed px/s (TIME based: every viewer runs his own clock, the phase differs between viewers) | fx: transition, bits 0-2 effect (0 cut 1 fade 2 wipe right 3 wipe down 4 slide from right 5 slide from bottom 6 dissolve 7 iris), bit 3 hide (else show), bits 4-5 duration (0.25/0.5/1/2 s), bit 6 toggles to replay | cycle: palette cycling start<<4|length | timing: cycle steps/s<<4 | blink frequency in 0.5 Hz steps | blink_view: blink colour<<4 | zoom bits 0-1 (0 x1 1 x2 2 x4) | 4 mirror x | 8 mirror y | win_x / win_y: graphics window x0<<4|x1 in 16 screen px cells (inclusive) | sumG / sumT: 16-bit checksums (sum of the renderer's 16-bit words mod 65536, the two checksum words left out), written by the client once everything else has been sent; every viewer's shader sums its own copy and lights the status LED green when it matches (amber blinking: still arriving) | text_wrap_x / text_wrap_y: wrap period of the moving text in 8 px units (0 = the screen size, the old behaviour; else a glyph leaving one edge re-enters at the other, partly visible on both: smooth marquees of text longer than the screen) | text_move: 0 = every run moves with text_x / text_y and wraps on the whole screen; n > 0 = only runs n-1.. move, the vertical wrap counts from text_clip_y0 and they are clipped to the rows text_clip_y0 .. text_clip_y1 (0 = the bottom); the earlier runs stay put",
 
   "sprites": {
@@ -152,7 +152,7 @@
   },
 
   "wings": {
-    "_doc": "Two side screens (left / right wing), the size of the main screen, folded behind it like a satellite's solar arrays; register show bit 1 (show = 3) unfolds them (FX layer KD Wings plays _KDWing 0 -> 1 over open_s, 1 -> 0 over close_s). No extra memory: content is ROUTED to a wing by registers that sit in the same register page as show (a late joiner gets routes and the device together, and they only change when the split changes): wing_tl / wing_tr = first text page (index in the text area) of the left / right wing's region (0 = none; the regions sit at the end of the text area, the main text before them), wing_gl / wing_gr = first graphics tile of the left / right wing's picture (0 = none; pictures on wings need the low-resolution mode, tiles placed like the main screen's), wing_shp = first shape slot of the left wing << 4 | first slot of the right wing (0 = none), wing_spr = 2 bits per sprite (0 main, 1 left, 2 right). Wing content uses the wing's own screen coordinates (0..W, 0..H) and never scrolls. At the side positions the device moves outward while the wings open (the inner wing never reaches the head).",
+    "_doc": "Two side screens (left / right wing), the size of the main screen, folded behind it like a satellite's solar arrays; register show bit 1 (show = 3) unfolds them (FX layer KD Wings plays _KDWing 0 -> 1 over open_s, 1 -> 0 over close_s). No extra memory: content is ROUTED to a wing by registers that sit in the same register page as show (a late joiner gets routes and the device together, and they only change when the split changes): wing_tl / wing_tr = first text page (index in the text area) of the left / right wing's region (0 = none; the regions sit at the end of the text area, the main text before them), wing_gl / wing_gr = first graphics tile of the left / right wing's picture (0 = none; pictures on wings need the low-resolution mode, tiles placed like the main screen's), wing_shp = first shape slot of the left wing << 4 | first slot of the right wing (0 = none), wing_spr = 2 bits per sprite (0 main, 1 left, 2 right), wing_mv = page (from the region start) where each wing's MOVING text begins, left << 4 | right (0 = none): those runs move with the main screen's text registers (text_x/y, speeds, wrap, clip), so three chat logs scroll in step. Wing content uses the wing's own screen coordinates (0..W, 0..H). At the side positions the device moves outward while the wings open (the inner wing never reaches the head).",
     "open_s": 1.4,
     "close_s": 0.9,
     "frame_px": 5,

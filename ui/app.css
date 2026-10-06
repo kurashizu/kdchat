@@ -379,6 +379,3 @@ body.sheet-open { overflow: hidden; }
 .tr-row .bar i { display: block; height: 100%; background: var(--accent); }
 /* the side screens: a wider preview; where the next picture goes */
 .device.wide img { width: auto; max-width: 100%; }
-#imgScreen { display: inline-flex; align-items: center; gap: 6px; }
-#imgScreen .lab { font-size: 12px; color: var(--dim); }
-#imgScreen .seg button { padding: 2px 8px; font-size: 12px; }

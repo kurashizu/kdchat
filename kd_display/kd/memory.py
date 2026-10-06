@@ -194,15 +194,24 @@ class Memory:
     def set_text(self, main, wings=None, wing_pages=(0, 0)):
         """the text area with side-screen regions: main runs first, then (when wings has runs) the left wing's region
         (wing_pages[0] pages) and the right wing's (wing_pages[1]) at the END of the area, each starting on its own page.
-        The main part is padded up to the first region (the walk must reach it); wing runs use the wing's own screen
-        coordinates. Sets wing_tl / wing_tr (first page of each region, 0 = none). -> (bytes, glyphs) like set_runs"""
+        wings: {0: left, 1: right}, each a run list (still) or (still runs, moving runs): the moving ones start on a page
+        of their own (register wing_mv = that page counted from the region start) and move with the main screen's text
+        registers. The main part is padded up to the first region (the walk must reach it); wing runs use the wing's
+        own screen coordinates. Sets wing_tl / wing_tr / wing_mv. -> (bytes, glyphs) like set_runs"""
         c, P = self.cfg, self.cfg.P
-        wings = wings or {}
-        npg = [wing_pages[k] if wings.get(k) else 0 for k in (0, 1)]
+        wings = {k: (v if isinstance(v, tuple) else (v, [])) for k, v in (wings or {}).items() if v}
+        wings = {k: v for k, v in wings.items() if v[0] or v[1]}
+        npg = [wing_pages[k] if k in wings else 0 for k in (0, 1)]
         total = c.text_bytes // P
-        if not any(npg):
+        has_mv = "wing_mv" in c.regs
+
+        def off():
             if "wing_tl" in c.regs:
                 self.reg("wing_tl", 0); self.reg("wing_tr", 0)
+            if has_mv:
+                self.reg("wing_mv", 0)
+        if not any(npg):
+            off()
             return self.set_runs(main)
         assert sum(npg) < total, "wing regions take the whole text area"
         tl = total - npg[0] - npg[1]
@@ -210,19 +219,34 @@ class Memory:
         self.reg("wing_tl", tl if npg[0] else 0); self.reg("wing_tr", tr if npg[1] else 0)
         used, glyphs = self.set_runs(main, limit=tl * P, fill=True)
         dropped, index = self.dropped, self.run_index         # (run_index: the main runs, for text_move)
-        if self.fill_failed:                          # the 64-run limit: the wings cannot be reached this time
-            self.reg("wing_tl", 0); self.reg("wing_tr", 0)
+        if self.fill_failed:                          # the run limit: the wings cannot be reached this time
+            off()
             self.buf[c.text_base + tl * P:c.text_base + c.text_bytes] = bytes(c.text_bytes - tl * P)
-            self.dropped = dropped + sum(len(r.codes) for k in (0, 1) for r in (wings.get(k) or []) if isinstance(r, Run))
+            self.dropped = dropped + sum(len(r.codes) for v in wings.values() for part in v for r in part if isinstance(r, Run))
             self.run_index = index
             return used, glyphs
         counts = (self._runs, glyphs)
-        if npg[0]:
-            u, g = self.set_runs(wings[0], base=tl * P, limit=npg[0] * P, fill=bool(npg[1]), counts=counts)
-            dropped += self.dropped; glyphs = g; counts = (self._runs, g)
-        if npg[1]:
-            u, g = self.set_runs(wings[1], base=tr * P, limit=npg[1] * P, counts=counts)
-            dropped += self.dropped; glyphs = g
+        mv = [0, 0]
+        for k, start in ((0, tl), (1, tr)):
+            if not npg[k]:
+                continue
+            still, moving = wings[k]
+            last = k == 1 or not npg[1]
+            if not moving:
+                u, g = self.set_runs(still, base=start * P, limit=npg[k] * P, fill=not last, counts=counts)
+                dropped += self.dropped; counts = (self._runs, g); glyphs = g
+                continue
+            # still part: whole pages of its own (at least one: wing_mv 0 would mean "nothing moves"), padded to its end
+            c0 = counts
+            u, g = self.set_runs(still, base=start * P, limit=npg[k] * P, counts=c0)
+            sp = max(1, -(-u // P))
+            u, g = self.set_runs(still, base=start * P, limit=sp * P, fill=True, counts=c0)
+            dropped += self.dropped; counts = (self._runs, g); glyphs = g
+            mv[k] = min(15, sp)
+            u, g = self.set_runs(moving, base=(start + sp) * P, limit=(npg[k] - sp) * P, fill=not last, counts=counts)
+            dropped += self.dropped; counts = (self._runs, g); glyphs = g
+        if has_mv:
+            self.reg("wing_mv", (mv[0] << 4) | mv[1])
         self.dropped, self.run_index = dropped, index
         return used, glyphs
 

@@ -592,10 +592,27 @@ def _tr_wings_on() -> bool:
     return bool(st["enabled"] and st["kd"] and st["targets"])
 
 
+def _tr_sides() -> dict:
+    """side screen -> language: one target on the right, two on the left and the right"""
+    ts = list(_tr_settings["targets"]) if _tr_wings_on() else []
+    return {} if not ts else {"right": ts[0]} if len(ts) == 1 else {"left": ts[0], "right": ts[1]}
+
+
+def _tr_label(code: str) -> str:
+    """the side screen's header (3x5 ASCII font): "JA  JAPANESE" """
+    import unicodedata
+    name = unicodedata.normalize("NFKD", tr.LANGUAGES[code][0]).encode("ascii", "ignore").decode().upper()
+    return f"{_tr_tag(code)}  {name}"
+
+
 def _tr_apply() -> None:
-    """the side screens' text regions follow the setting; models load in the background (the first message is quick)"""
+    """the side screens follow the setting (languages, headers, text regions); models load in the background (the
+    first message is quick)"""
     if _kd is not None:
+        sides = _tr_sides()
+        l, r = sides.get("left"), sides.get("right")
         _kd.set_wing_text_on(_tr_wings_on())
+        _kd.set_wing_langs(l, r, (_tr_label(l) if l else None, _tr_label(r) if r else None))
     st = _tr_settings
     if st["enabled"] and st["targets"]:
         src = st["source"] if st["source"] != "auto" else st["latin"]
@@ -645,13 +662,14 @@ def _chatbox_compose(text: str, trs: dict) -> str:
     return out
 
 
-def _kd_wings(trs: dict) -> None:
-    """the newest message's translations on the side screens (one target: the right one)"""
+def _kd_wings(trs: dict, kd_id: Optional[int] = None) -> None:
+    """a message's translations on the side screens: the chat layout shows them in the translated logs (in step with
+    the main one), the single layout the newest one"""
     if _kd is None or not _tr_wings_on():
         return
-    ts = [t for t in _tr_settings["targets"]]
-    sides = {"right": ts[0]} if len(ts) == 1 else {"left": ts[0], "right": ts[1]}
-    _kd.set_wing_text({side: ((trs[t], _tr_tag(t)) if t in trs else None) for side, t in sides.items()})
+    if kd_id is not None:
+        _kd.set_translations(kd_id, trs)
+    _kd.set_wing_text({side: ((trs[t], _tr_tag(t)) if t in trs else None) for side, t in _tr_sides().items()})
 
 
 class _ChatboxThrottle:
@@ -718,7 +736,7 @@ def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
         _cb.send(_chatbox_compose(text, trs) if final else text, final, bool(req.sfx))   # (first: an OSC error must not leave a kd message)
     kd_id = _kd.new_message(text, final, bool(req.sfx)) if use["kd"] and _kd is not None else None
     if final and use["kd"]:
-        _kd_wings(trs)
+        _kd_wings(trs, kd_id)
     targets = [k for k in ("chatbox", "kd") if use[k]]
     msg = MessageItem(output="+".join(targets), id=_next_message_id(), text=text, immediate=True, sfx=bool(req.sfx),
                       created_at=datetime.now(timezone.utc).isoformat(), length=len(text), kd_id=kd_id,
@@ -758,7 +776,7 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
         if use["kd"] and _kd is not None:
             _kd.update_message(msg.kd_id, text, final=True if done else None, sfx=done and msg.sfx)
             if done:
-                _kd_wings(trs)
+                _kd_wings(trs, msg.kd_id)
         if use["chatbox"] and latest_cb is msg:
             _cb.send(_chatbox_compose(text, trs) if done else text, done, done and msg.sfx)
         msg.text, msg.length = text, len(text)
@@ -776,8 +794,11 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
         _kd.update_message(msg.kd_id, text, edited=edited)
         with _history_lock:
             newest_kd = next((m for m in reversed(_history) if m.kd_id is not None and m.final), None)
-        if done and newest_kd is msg:
-            _kd_wings(trs)
+        if done:
+            if newest_kd is msg:
+                _kd_wings(trs, msg.kd_id)
+            elif _tr_wings_on():
+                _kd.set_translations(msg.kd_id, trs)          # an older message: its rows in the translated logs
     if use["chatbox"] and latest_cb is msg:
         _cb.send(_chatbox_compose(text, trs) if done else text, done, False)   # the game only shows its newest message
     msg.text, msg.length, msg.edited = text, len(text), edited
@@ -1165,14 +1186,10 @@ def kd_chime(user: str = AuthDep) -> Response:
 
 
 @api.post("/kd/image", tags=["kd"], summary="Show a picture on the display")
-async def kd_image(request: Request, user: str = AuthDep,
-                   screen: str = Query("main", description="main, left or right (a side screen)")) -> dict:
+async def kd_image(request: Request, user: str = AuthDep) -> dict:
     """Body = the image file itself (png / jpg / webp / gif…, at most 10 MB). It is cropped, its contrast and
-    colours adjusted, shown with 16 colours (10 taken from the picture) under the header until the next message or
-    DELETE /kd/image. screen=left / right puts it on a side screen: up to three pictures at once; they share the
-    graphics memory, so then all of them use the low resolution (2x2 px dots) and one palette."""
-    if screen not in ("main", "left", "right"):
-        raise HTTPException(status_code=400, detail="screen must be main, left or right")
+    colours adjusted, shown with 16 colours (10 taken from the picture) on the main screen under the header until the
+    next message or DELETE /kd/image."""
     k = _need_kd()
     data = await request.body()
     if not data:
@@ -1180,7 +1197,7 @@ async def kd_image(request: Request, user: str = AuthDep,
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image too large (at most 10 MB)")
     try:
-        info = await run_in_threadpool(k.show_image, data, screen)
+        info = await run_in_threadpool(k.show_image, data)
     except Exception as e:     # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Cannot read the image: {e}")
     log.info("kd image: %d B user=%s", len(data), user)
@@ -1189,11 +1206,8 @@ async def kd_image(request: Request, user: str = AuthDep,
 
 @api.delete("/kd/image", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="Close the picture",
             response_class=Response)
-def kd_image_close(user: str = AuthDep,
-                   screen: Optional[str] = Query(None, description="main, left or right; none = all")) -> Response:
-    if screen not in (None, "main", "left", "right"):
-        raise HTTPException(status_code=400, detail="screen must be main, left or right")
-    _need_kd().close_image(screen)
+def kd_image_close(user: str = AuthDep) -> Response:
+    _need_kd().close_image()
     return Response(status_code=204)
 
 

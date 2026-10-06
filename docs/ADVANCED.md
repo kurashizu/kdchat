@@ -62,7 +62,9 @@ affected).
 Settings → Translation (or `PUT /api/v1/translate`): `enabled`, `source` (`auto` or the language you type; with `auto`,
 `latin` = your language when you type Latin script), `targets` (up to 2), `chatbox` (how many translations the game
 chatbox gets: 0-2; the original always comes first, translations are shortened with … to fit 144 characters / 9 lines),
-`kd` (on the Klaude display's side screens: the first target on the left, the second on the right; one target: right).
+`kd` (on the Klaude display's side screens: the first target on the left, the second on the right; one target: right;
+in the chat layout each side screen shows the whole log translated, in step with the main one; the single layout shows
+the newest translation).
 
 The engine is Mozilla's Firefox Translations (Bergamot, WebAssembly) running inside kdchat through an embedded V8
 (mini-racer), on the CPU of the machine that runs kdchat: a server deployment translates on the server. Models are
@@ -208,7 +210,7 @@ final message is sent at once.
 
 Translation: `GET /api/v1/translate` (settings + every language with its download state), `PUT /api/v1/translate`,
 `POST /api/v1/translate/models/{code}` (download, progress in `GET /api/v1/translate`), `DELETE …/models/{code}`,
-`POST /api/v1/translate/try {"text"}` (translate without sending). Pictures: `POST /api/v1/kd/image?screen=main|left|right`.
+`POST /api/v1/translate/try {"text"}` (translate without sending). Pictures: `POST /api/v1/kd/image` (main screen).
 
 ## Troubleshooting
 

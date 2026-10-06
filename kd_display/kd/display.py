@@ -210,11 +210,9 @@ class Display:
         order with any other page item's pages, so a changed line never blanks or moves other text (a chat line).
         pages: a fixed number of pages for it (it is cut to fit; it never moves the items after it).
         screen: "main", or "left" / "right" = a side screen (in its own coordinates; shows while the wings are open,
-        d.set(wings=True); it never moves). Wing text goes into its wing's region of the text area (config
-        wings.text_pages, d.set(wing_pages=...))."""
+        d.set(wings=True)). Wing text goes into its wing's region of the text area (config wings.text_pages,
+        d.set(wing_pages=...)); moving wing text moves with the main screen's text registers (three logs in step)."""
         sid = screen_id(screen)
-        if sid and move:
-            raise ValueError("wing text cannot move")
         if scale not in (1, 2, "small", "tiny"):
             raise ValueError('text scale must be 1, 2, "small" (5x7 ASCII) or "tiny" (3x5 ASCII)')
         if scale in ("small", "tiny") and box:
@@ -483,10 +481,12 @@ class Display:
                     runs.append(Page(False, 0, y, npg))
             return runs, first
         runs, first_move = runs_of(order, True)
-        wing_runs = {k - 1: runs_of([i for i in self.items if scr(i) == k])[0] for k in (1, 2)}
+        mvd = lambda i: self.item_opts.get(i, (False,))[0]
+        wing_runs = {k - 1: (runs_of([i for i in self.items if scr(i) == k and not mvd(i)])[0],
+                             runs_of([i for i in self.items if scr(i) == k and mvd(i)])[0]) for k in (1, 2)}
         if wings_cfg:
             wp = st["wing_pages"] or self.cfg.wing_text_pages
-            used, glyphs = m.set_text(runs, {k: r for k, r in wing_runs.items() if r}, wp)
+            used, glyphs = m.set_text(runs, {k: r for k, r in wing_runs.items() if r[0] or r[1]}, wp)
         else:
             used, glyphs = m.set_runs(runs)
         move_from = 0                                 # 0: everything moves (no item asked for move)

@@ -504,7 +504,6 @@ function paintKdStat() {
   parts.push(`${s.width}×${s.height}`, t("kd.msgs", { n: s.messages }));
   if (s.image) parts.push(t("kd.showingImage"));
   if (s.wings) parts.push(t("kd.wingsOpen"));
-  if ((s.images || []).length > 1) parts.push(t("kd.lowres"));
   st.appendChild(document.createTextNode(" · " + parts.join(" · ")));
 }
 
@@ -522,7 +521,6 @@ async function refreshKd(force) {
       $("prev").style.aspectRatio = `${pw} / ${s.height}`;
       $("prev").closest(".device").classList.toggle("wide", !!s.wings);
     }
-    paintImgScreen();
     $("led").className = s.synced ? "ok" : "";
     paintKdStat();
     $("closeImg").hidden = !(s.images || []).length && !s.image;
@@ -543,22 +541,9 @@ async function sendImage(file) {
   if (!file || !file.type.startsWith("image/")) return;
   if (!S.out.kd) { toast(t("kd.needKd"), "err"); return; }
   toast(t("kd.imgWorking"));
-  const scr = S.imgScreen || "main";
-  try { const r = await api("/kd/image?screen=" + scr, "POST", undefined, file); toast(t("kd.imgShown", { s: Math.round(r.eta_s) })); refreshKd(true); }
+  try { const r = await api("/kd/image", "POST", undefined, file); toast(t("kd.imgShown", { s: Math.round(r.eta_s) })); refreshKd(true); }
   catch (e) { toast(t("kd.imgFailed", { msg: e.message }), "err"); }
 }
-// where the next picture goes (main screen or a side screen; side screens: up to 3 pictures, low resolution)
-function paintImgScreen() {
-  const box = $("imgScreen");
-  const can = S.kd && S.kd.settings && S.kd.settings.wings !== "off";
-  box.hidden = !can;
-  if (!can) { S.imgScreen = "main"; return; }
-  box.innerHTML = "";
-  box.appendChild(el("span", "lab", t("img.to")));
-  box.appendChild(segOf(["main", "left", "right"].map((v) => [v, t("scr." + v)]), S.imgScreen || "main",
-                        (v) => { S.imgScreen = v; paintImgScreen(); }));
-}
-
 $("file").onchange = (e) => { sendImage(e.target.files[0]); e.target.value = ""; };
 document.addEventListener("paste", (e) => {
   const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === "file" && i.type.startsWith("image/"));

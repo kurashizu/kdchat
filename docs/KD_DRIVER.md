@@ -118,7 +118,7 @@ least error and maps the other pixels to the nearest of them. Shapes and sprites
 
 ### Memory, pages and sending
 
-- The memory is 6,250 bytes in 209 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
+- The memory is 7,150 bytes in 239 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
   bytes (`KD_B0..KD_B29`), 248 bits of synced parameters. Default rate 3 frames per second.
 - `present()` only encodes. Frames go out from `tick()` or `run()`.
 - Only changed pages are sent. A full screen takes a few dozen frames; changing one line of text usually 1 or 2.
@@ -322,7 +322,9 @@ with the device, and they only change when the split changes) say which part of 
 
 - **Text:** the side screens' text sits in regions at the END of the text area (`wing_pages` pages each, default 4 + 4),
   the main screen's text before them. The main screen has that much less text memory while a side screen has text.
-  Side-screen text never moves (`move=True` is not allowed there).
+  Moving side-screen text (`move=True`) moves with the main screen's text registers (`text_x/y`, speeds, `text_wrap`,
+  `text_clip`): a side screen's still items fill the first pages of its region, its moving ones start on the next page
+  (register `wing_mv`). Three chat logs scroll in step with one register write.
 - **Shapes:** the driver stores the main screen's shapes first, then the left's, then the right's (it renumbers the
   slots in memory; you keep using your own slot numbers).
 - **Sprites:** 2 bits per sprite.
@@ -379,9 +381,9 @@ d.transition(effect="fade", show=True, duration=0.5)
 
 | What | Limit | Beyond it |
 |---|---|---|
-| Text memory | 630 bytes for all screens (100 hanzi on a full screen take about 190); side screens take `wing_pages` × 30 bytes each from it | from the first text that does not fit on, nothing shows; counted in `dropped` |
-| Text runs | 64 (a line break or a latin / CJK switch starts a new run) | as above |
-| Characters on screen | 360 | as above |
+| Text memory | 1,530 bytes for all screens (100 hanzi on a full screen take about 190); side screens take `wing_pages` × 30 bytes each from it | from the first text that does not fit on, nothing shows; counted in `dropped` |
+| Text runs | 128 (a line break or a latin / CJK switch starts a new run) | as above |
+| Characters on screen | 480 | as above |
 | One run | 31 characters (split automatically) | - |
 | Text coordinates | a run's position fields are 0..127; farther runs continue from the previous one (same line or a few lines down), so long lines and columns work | negative positions, or more than 127 from the previous run, do not fit (`dropped`); with `clip=True` the off-screen part is cut (`clipped`) |
 | Sprites | 4, 16×16, 4 colours each (incl. transparent) | - |
@@ -535,8 +537,8 @@ d.present()
 | `KD_P` | int 0..255 | page id; the page's bytes are `KD_B0..KD_B29` of the same frame |
 | `KD_B0` .. `KD_B29` | int 0..255 | the 30 bytes of the page |
 
-Page ids: 0 = idle, 1..209 = memory pages; 254 = clear graphics and 255 = chime (commands, allocated downwards from
-255, so the memory can grow upwards); 210..253 are free. While `KD_P` holds a page id, the avatar's animator
+Page ids: 0 = idle, 1..239 = memory pages; 254 = clear graphics and 255 = chime (commands, allocated downwards from
+255, so the memory can grow upwards); 240..253 are free. While `KD_P` holds a page id, the avatar's animator
 writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id changes. A frame must stay for at least
 2 of the viewer's animator frames, which 3 Hz easily is.
 
@@ -547,10 +549,10 @@ writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id ch
 | `bitmap` | 0 | 4480 | graphics, 2 bits per pixel (or photo coefficients) |
 | `tilecol` | 4480 | 560 | the 4 palette indices of every 8×8 tile |
 | `palette` | 5040 | 32 | 16 colours, RGB565 |
-| `text` | 5100 | 630 | the run chain (headers + 13-bit glyph codes) |
-| `regs` | 5730 | 47 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show` (bit 0 shown, bit 1 side screens open), `size`, shape offsets, side-screen routes `wing_tl` / `wing_tr` (first text page of each region), `wing_gl` / `wing_gr` (first tile of each picture), `wing_shp` (first shape slot left << 4 \| right), `wing_spr` (2 bits per sprite) |
-| `sprites` | 5790 | 276 | 4 sprites: registers, colours, 16×16 2-bit patterns |
-| `shapes` | 6090 | 160 | 16 shapes × 10 bytes |
+| `text` | 5100 | 1530 | the run chain (headers + 7 / 12 / 14-bit glyph codes) |
+| `regs` | 6630 | 48 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show` (bit 0 shown, bit 1 side screens open), `size`, shape offsets, side-screen routes `wing_tl` / `wing_tr` (first text page of each region), `wing_gl` / `wing_gr` (first tile of each picture), `wing_shp` (first shape slot left << 4 \| right), `wing_spr` (2 bits per sprite), `wing_mv` (first moving page of each wing's region, left << 4 \| right) |
+| `sprites` | 6690 | 276 | 4 sprites: registers, colours, 16×16 2-bit patterns |
+| `shapes` | 6990 | 160 | 16 shapes × 10 bytes |
 
 Glyph codes: ASCII 7 bits, the common page (kana + 3,755 hanzi) 12 bits, everything else 14 bits; a stretch that mixes
 common and extended full-width glyphs is written in the extended mode alone when that is shorter (Japanese).

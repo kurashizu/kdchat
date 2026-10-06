@@ -43,15 +43,15 @@ the console: your messages show up as a chat log on the display above your head,
 pictures you paste in. Everyone around you sees it, including people who join later. With any other avatar, leave 🖥
 off.
 
-Two **side screens** unfold from the display when they have something to show: your translations, or pictures (up
-to three at once: Image → "Show on" main / left / right).
+Two **side screens** unfold from the display when translation is on: each shows the same chat in its language,
+scrolling in step with the main screen.
 
 ## Translation
 
 Settings → **Translation**: pick up to two languages and download them (about 85 MB each, once). Every message you
 send is then translated on your own computer (nothing goes online): the game chatbox shows the original plus the
-translations that fit, and the Klaude display shows them on its side screens. Your typing language is detected
-automatically.
+translations that fit, and the Klaude display shows the whole chat translated on its side screens. Your typing language is
+detected automatically.
 
 Want to put your own things on the display (a clock, now playing, games)? The display driver is in this repository:
 see [docs/KD_DRIVER.md](docs/KD_DRIVER.md) and `examples/hello_kd.py`.

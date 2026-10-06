@@ -325,8 +325,14 @@ def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
             cb = c.code_bits[0] if mode == 3 else c.code_bits.get(mode, c.code_bits[2])   # like the shader: 2 / 3 read as extended
             adv = 4 if tiny else 6 if small else ((c.half if mode == 0 else c.cell) + c.gap) * scale
             gh = 5 if tiny else 7 if small else c.cell * scale
-            rs = route_text((off - tb) // c.P)
-            moving = (mv == 0 or r + 1 >= mv) and rs == 0       # wing text never moves
+            pgi = (off - tb) // c.P
+            rs = route_text(pgi)
+            if rs == 0:
+                moving = mv == 0 or r + 1 >= mv
+            else:                                           # a wing: its runs from page wing_mv on move (0 = none)
+                wmv = (R("wing_mv") >> (4 if rs == 1 else 0)) & 15 if "wing_mv" in c.regs else 0
+                start = R("wing_tl") if rs == 1 else R("wing_tr")
+                moving = wmv > 0 and pgi >= start + wmv
             fgc, bgc = pal(fg), pal(bg)
             if not skip and rs == screen:
                 for i in range(n):

@@ -1,2 +1,2 @@
 """The version of kdchat: the single source (pyproject.toml must match; a test checks it)."""
-__version__ = "1.4.0"
+__version__ = "1.5.0"

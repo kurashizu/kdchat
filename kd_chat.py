@@ -73,12 +73,15 @@ CHOICES = {
     "image_res": ("high", "low"),
     "wings": ("auto", "on", "off"),
 }
-WING_PAGES = 4                # text pages of each side screen's region (the main log has that much less)
+WING_PAGES = 4                # text pages of each side screen's region in the single layout (the newest translation)
+MIRROR_PAGES = 17             # chat layout with translations: each screen gets a third of the text area (header + 8 line
+                             # slots of 2 pages): the side screens show the same log, translated, in step with the main one
 SIDES = {"left": 1, "right": 2}
 COLOR_KEYS = ("color", "accent", "meta", "alt")
 HDR = 10                     # header height: one 3x5 line (time zone + time | date), 2 px space, a 2 px rule
 DIVIDER = 3                  # the dividers between messages: dark grey (subtle)
 SHP_RULE, SHP_LOG0 = 0, 1     # hardware shapes: the header rule; from 1 on the log's dividers and the draft caret
+SHP_WING = 14                # 14, 15: the side screens' header rules
 TYPING_COLOR = 15            # the typing indicator: its own palette colour (cream), never offered as a choice
 SPEED = {"left": {"slow": 20, "normal": 36, "fast": 60}, "up": {"slow": 8, "normal": 14, "fast": 22}}
 SLOT_MEM = -(-Config().text_bytes // Config().P) - 1   # memory pages for the line slots (the text area's pages, the header takes 1)
@@ -295,6 +298,8 @@ class KdChat:
         self.img_pal = None                  # the palette every picture shares
         self.wing_text = {}                  # side -> (text, tag): the newest message's translations
         self.wing_text_on = False            # translations go to the side screens (set by the app)
+        self.wing_lang = [None, None]        # language code of the left / right side screen (set_wing_langs)
+        self.wing_label = [None, None]
         self._next_id = 1
         self._minute = None
         self._stop = False
@@ -303,6 +308,7 @@ class KdChat:
         self.slots: list = []                # row key per slot (None = empty)
         self.slot_sig: list = []             # what each slot was drawn with
         self.slot_parts: list = []
+        self.slot_wparts: list = []          # side -> parts of that slot on the side screens (mirror mode)
         self._phase2 = None                  # scroll value waiting for its rows to be out
         self._full = True                    # redraw everything at the next step
         self._single_sig = None
@@ -339,8 +345,14 @@ class KdChat:
     @property
     def K(self):
         """line slots: visible lines + a partial one + the next one"""
+        if self.mirror():
+            return (MIRROR_PAGES - 1) // self.slot_pages if self.slot_pages == 2 else 14
         mem = SLOT_MEM - (2 * WING_PAGES if self.wings_reserved() else 0)
-        return min(14, mem) if self.slot_pages == 1 else mem // 2      # (14: the text's 64-run limit; fills 96x176)
+        return min(14, mem) if self.slot_pages == 1 else min(10, mem // 2)   # (14 / 10: the run limit; fills 96x176)
+
+    def mirror(self):
+        """chat layout with translations on the side screens: three logs, line by line in step"""
+        return self.s["layout"] == "chat" and self.wing_text_on and self.s["wings"] != "off" and any(self.wing_lang)
 
     def wings_reserved(self):
         """do the side screens get their text regions (the log has 2 x WING_PAGES pages less)?"""
@@ -349,7 +361,8 @@ class KdChat:
     def wings_open(self):
         if self.s["wings"] == "off" or not self.active:
             return False
-        return self.s["wings"] == "on" or bool(self.wing_img) or any(t for t, _ in self.wing_text.values())
+        return (self.s["wings"] == "on" or bool(self.wing_img) or any(t for t, _ in self.wing_text.values())
+                or self.mirror())
 
     @property
     def lh(self):
@@ -569,6 +582,8 @@ class KdChat:
                 self._step()
 
     def show_image(self, data: bytes, screen: str = "main") -> dict:
+        if screen != "main":
+            raise ValueError("pictures are shown on the main screen only")
         """show a picture: on the main screen below the header (until the next message or close_image), or on a side
         screen ("left" / "right"). Pictures on side screens share the graphics memory: then every picture uses the
         low-resolution mode (2x2 px dots) and all of them one palette."""
@@ -715,21 +730,55 @@ class KdChat:
         return text[:lo].rstrip() + "…" if lo else ""
 
     def _draw_wings(self):
-        """side screens: pictures, the translations (+ a small language tag), unfolded or not"""
+        """side screens: their header (the language), the newest translation (single layout) or, in mirror mode, the
+        translated log (its line slots are written by _assign); unfolded or not"""
         d, s, c = self.d, self.s, self.d.cfg
+        mirror = self.mirror()
         for side, name in ((1, "left"), (2, "right")):
             d.wing_picture(name, self.wing_img.get(side))
+            lang, label = self.wing_lang[side - 1], self.wing_label[side - 1]
+            # the header: the language (no clock / date: the main screen has them) and its rule
+            if lang and self.wings_reserved():
+                d.compose([{"s": label, "x": 1, "y": 1, "scale": "tiny", "color": s["meta"]}],
+                          id=f"wh{side}", page=True, pages=1, screen=name)
+                d.shapes.rect(SHP_WING + side - 1, 0, HDR - 2, c.W, c.gscale, color=s["meta"], fill=s["meta"], width=0,
+                              screen=name)
+            else:
+                d.remove(f"wh{side}")
+                d.shapes.hide(SHP_WING + side - 1)
             text, tag = self.wing_text.get(side, (None, None))
-            if text and self.wings_reserved():
-                t = self._fit_wing(text, tag)
-                parts = [{"s": t, "x": 4, "y": 4, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"]}]
-                if tag:
-                    parts.append({"s": tag, "x": c.W - 2 - len(tag) * TINY_W, "y": c.H - 7, "scale": "tiny",
-                                  "color": s["meta"]})
-                d.compose(parts, id=f"wing{side}", screen=name)
+            if text and self.wings_reserved() and not mirror:
+                t = self._fit_wing(text, None)
+                top = HDR + 2 if lang else 4
+                d.compose([{"s": t, "x": 4, "y": top, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"]}],
+                          id=f"wing{side}", screen=name)
             else:
                 d.remove(f"wing{side}")
-        d.set(wings=self.wings_open(), wing_pages=(WING_PAGES, WING_PAGES))
+        pages = MIRROR_PAGES if mirror else WING_PAGES
+        d.set(wings=self.wings_open(), wing_pages=(pages, pages))
+
+    def set_wing_langs(self, left, right, labels=(None, None)):
+        """which language each side screen shows (None: that screen stays empty); labels: their header text"""
+        with self.lock:
+            new = [left, right]
+            if new != self.wing_lang or list(labels) != self.wing_label:
+                self.wing_lang, self.wing_label = new, list(labels)
+                self._relayout()
+                self._full = True
+                if self.active:
+                    self._step()
+
+    def set_translations(self, mid, trs: dict):
+        """{language: text} of a message (its translations): the side screens show them in step with the main log"""
+        with self.lock:
+            m = next((x for x in self.msgs if x["id"] == mid), None)
+            if m is None:
+                return False
+            m["tr"] = dict(trs)
+            self._relayout()
+            if self.active:
+                self._step()
+            return True
 
     def status(self) -> dict:
         with self.lock:
@@ -804,7 +853,16 @@ class KdChat:
         # measured at a positive y (the divider sits a few px above the gap: its runs must be representable there)
         deco = [dict(p, y=p["y"] + 32) for p in self._deco(m)] if m["gap"] else []
         m["lines"] = self._lines(body, deco, m["sc"])
-        m["h"] = m["gap"] + len(m["lines"]) * self.lh
+        # the side screens' lines (mirror mode): the translations; the message takes the rows of its longest language
+        m["wl"] = {}
+        if self.mirror() and not m.get("reverted") and not m.get("draft"):
+            for side in (1, 2):
+                lang = self.wing_lang[side - 1]
+                t = (m.get("tr") or {}).get(lang) if lang else None
+                if t:
+                    m["wl"][side] = self._lines(t, [], m["sc"])
+        n = max([len(m["lines"])] + [len(v) for v in m["wl"].values()])
+        m["h"] = m["gap"] + n * self.lh
 
     def _relayout(self, last_only=False):
         """line breaks + virtual positions of the messages (last_only: only the newest changed / is new)"""
@@ -844,14 +902,20 @@ class KdChat:
             else:                                                   # alternate, by id: stable while the log scrolls
                 col = s["alt"] if s["alt"] and m["id"] % 2 else s["color"]
             vy = m["vy0"] + m["gap"]
-            for k, line in enumerate(m["lines"]):
+            wl = m.get("wl") or {}
+            nrows = max([len(m["lines"])] + [len(v) for v in wl.values()])
+            for k in range(nrows):
                 parts = []
                 if k == 0 and m["gap"]:
                     parts = [dict(p, y=ring(m["vy0"] + p["y"])) for p in self._deco(m)]
-                parts.append({"s": line, "x": 0, "y": ring(vy), "scale": m.get("sc", s["scale"]), "color": col})
-                sig = tuple((p["s"], p["x"], p["y"], p.get("scale", 1), p["color"]) for p in parts)
+                if k < len(m["lines"]):
+                    parts.append({"s": m["lines"][k], "x": 0, "y": ring(vy), "scale": m.get("sc", s["scale"]), "color": col})
+                wparts = {side: [{"s": v[k], "x": 0, "y": ring(vy), "scale": m.get("sc", s["scale"]), "color": col}]
+                          for side, v in wl.items() if k < len(v)}
+                sig = tuple((p["s"], p["x"], p["y"], p.get("scale", 1), p["color"]) for p in parts) + \
+                    tuple((side, p["s"], p["y"], p["color"]) for side in sorted(wparts) for p in wparts[side])
                 top_y = vy - (m["gap"] if k == 0 else 0)
-                rows[(m["id"], k)] = (vy, parts, sig, top_y)
+                rows[(m["id"], k)] = (vy, parts, sig, top_y, wparts)
                 vy += lh
         return rows
 
@@ -934,6 +998,7 @@ class KdChat:
             self._base()
             K = self.K
             self.slots, self.slot_sig, self.slot_parts = [None] * K, [None] * K, [[] for _ in range(K)]
+            self.slot_wparts = [{} for _ in range(K)]
             msgs = self._all()
             rows = self._rows(msgs)
             T = msgs[-1]["vy0"] + msgs[-1]["h"] if msgs else 0
@@ -977,11 +1042,11 @@ class KdChat:
         changed = False
         for i, key in enumerate(self.slots):
             if key is not None and key not in want:
-                self.slots[i] = None; self.slot_sig[i] = None; self.slot_parts[i] = []
+                self.slots[i] = None; self.slot_sig[i] = None; self.slot_parts[i] = []; self.slot_wparts[i] = {}
                 changed = True
         if write:
             for key in sorted(want, key=lambda k: rows[k][0]):
-                vy, parts, sig, top_y = rows[key]
+                vy, parts, sig, top_y, wparts = rows[key]
                 if key in self.slots:
                     i = self.slots.index(key)
                 elif hidden_at is not None and top_y < hidden_at + self.band:
@@ -992,9 +1057,17 @@ class KdChat:
                     continue
                 if self.slot_sig[i] != sig:
                     self.slots[i], self.slot_sig[i], self.slot_parts[i] = key, sig, parts
+                    self.slot_wparts[i] = wparts
                     changed = True
+        mirror = self.mirror()
         for i in range(len(self.slots)):
             self.d.compose(self.slot_parts[i], id=f"s{i}", move=True, page=True, pages=self.slot_pages)
+            for side, name in ((1, "left"), (2, "right")):
+                if mirror and self.wing_lang[side - 1]:
+                    w = self.slot_wparts[i].get(side, []) if self.slots[i] is not None else []
+                    self.d.compose(w, id=f"w{side}s{i}", move=True, page=True, pages=self.slot_pages, screen=name)
+                else:
+                    self.d.remove(f"w{side}s{i}")
         return changed
 
     def _busy(self):
@@ -1010,7 +1083,7 @@ class KdChat:
         d, s, c = self.d, self.s, self.d.cfg
         S, top, H = self.S, self.top, c.H
         S2 = self._phase2 if self._phase2 is not None else S
-        free = list(range(SHP_LOG0, c.shp_n))
+        free = list(range(SHP_LOG0, SHP_WING))
         want = []
 
         def inside(y0, y1):                                       # log rows y0..y1 visible at both scrolls
