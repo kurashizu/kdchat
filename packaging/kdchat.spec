@@ -75,7 +75,7 @@ a = Analysis(
     # not used: test / dev tools, other web servers' extras, standard-library parts the app never imports, Pillow's
     # GUI bindings and formats we do not read
     excludes=["uvloop", "watchfiles", "pytest", "httpx", "websockets", "httptools", "yaml", "dotenv",
-              "unittest", "pydoc", "doctest", "lib2to3", "pdb", "test", "distutils", "setuptools", "pip",
+              "unittest", "pydoc", "doctest", "lib2to3", "pdb", "test", "pip",
               "PIL.ImageQt", "PIL.ImageTk", "PIL._avif", "PIL.FpxImagePlugin", "PIL.MicImagePlugin",
               "numpy", "IPython", "matplotlib"],
     noarchive=False,
