@@ -222,3 +222,11 @@ def test_small_font_accents():
     lines = d.layout.lines("Größe déjà vu, Łódź ¿qué?", 176, "small")
     text = "".join(ch[3] for ch in lines[0])
     assert text == "Größe déjà vu, Lódz qué?" and not d.layout.missing
+
+
+def test_korean_glyphs_and_word_wrap():
+    """Korean (KS X 1001 syllables) has glyphs and breaks lines at spaces"""
+    d = Display(dry=True)
+    lines = d.layout.lines("오늘 날씨가 정말 좋네요, 같이 산책하러 갈래요?", 176)
+    assert not d.layout.missing
+    assert all(not "".join(c[3] for c in l).endswith(("오", "날", "씨")) for l in lines[:-1])

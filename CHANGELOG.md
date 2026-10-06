@@ -3,6 +3,14 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-10-07
+
+### Added
+- **Korean on the Klaude display** (needs the avatar with the 1.7.0 menu icon; older avatars show □): the 2,350 common
+  Hangul syllables of KS X 1001 and the compatibility jamo. Korean lines break at spaces, like English; the space between Korean words is a full-width blank (a
+  line stays in one code mode and fits its memory). The font grew
+  by 2,443 glyphs; the codes of every other character are unchanged.
+
 ## [1.6.1] - 2026-10-07
 
 ### Fixed

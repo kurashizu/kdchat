@@ -4,6 +4,11 @@ from .config import MODE_ASCII, MODE_TINY, MODE_SMALL, SMALL_FONTS
 from .tiny import SMALL_CODES, fold
 
 NO_START = set("，。、；：？！）」』】》〉…—～·,.;:?!)]}%")
+def hangul(ch):
+    """a Korean syllable / jamo: Korean breaks lines at spaces, like latin words"""
+    return "\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e"
+
+
 NO_END = set("（「『【《〈([{")
 
 
@@ -53,12 +58,22 @@ class Layout:
             text = fold(text, extra=scale == "small")    # accents the font lacks: dropped (é stays, ș -> s)
         for para in text.split("\n"):
             cells = [self.glyph(ch, scale) + (self.width(self.glyph(ch, scale)[0], scale), ch) for ch in para]
+            if scale not in SMALL_FONTS:
+                # a space between Korean words: the full-width blank (U+3000), so a Korean line stays in one code mode
+                # (every switch to ASCII and back costs two run headers: a line of short words would not fit its memory)
+                for k in range(1, len(para) - 1):
+                    if para[k] == " " and hangul(para[k - 1]) and hangul(para[k + 1]):
+                        g = self.glyph("\u3000", scale)
+                        cells[k] = g + (self.width(g[0], scale), " ")
             LATIN = (MODE_ASCII, MODE_TINY, MODE_SMALL)
             units, i = [], 0
-            while i < len(cells):                     # a latin word is one unit; everything else one character
+            while i < len(cells):                     # a latin / Korean word is one unit; everything else one character
                 j = i + 1
-                if cells[i][3] != " " and cells[i][0] in LATIN:
-                    while j < len(cells) and cells[j][0] in LATIN and cells[j][3] != " ":
+                if cells[i][3] != " " and (cells[i][0] in LATIN or hangul(cells[i][3])):
+                    kor = hangul(cells[i][3])
+                    while j < len(cells) and cells[j][3] != " " and (cells[j][0] in LATIN or hangul(cells[j][3])
+                                                                     or kor and cells[j][3] in NO_START):
+                        kor = kor or hangul(cells[j][3])
                         j += 1
                 units.append(cells[i:j]); i = j
             line, w, lines = [], 0, []
