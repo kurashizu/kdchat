@@ -1,7 +1,22 @@
 # Changelog
 
-All notable changes to vrc-chatbox. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
+
+## [1.3.0] - 2026-10-06
+
+### Changed
+- **Renamed from vrc-chatbox to kdchat**: the repository (github.com/kurashizu/kdchat), the app, the Windows exe
+  (`kdchat-<version>-windows-x64.exe`), the systemd unit (`deploy/kdchat.service`). Nothing to do when updating: the
+  Windows app moves `%APPDATA%\vrc-chatbox` to `%APPDATA%\kdchat` on the first start, the console keeps its browser
+  settings, and `VCB_DATA_DIR` still works as an alias of `KDCHAT_DATA_DIR`. You may have to log in once again.
+- A shorter, user-facing README; the advanced topics moved to `docs/ADVANCED.md`.
+
+### Added
+- `docs/KD_DRIVER.md`: the complete Klaude display driver API (text, graphics, shapes, sprites, screen state,
+  transitions, sync, the wire protocol and memory map) for building your own programs on the display.
+- `examples/hello_kd.py`: a minimal program on the driver (`--dry` renders `preview.png` without VRChat).
+- Links to the Klaude avatar on VRChat.
 
 ## [1.2.0] - 2026-10-05
 

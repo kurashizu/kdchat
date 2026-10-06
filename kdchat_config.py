@@ -1,4 +1,4 @@
-"""Configuration of vrc-chatbox.
+"""Configuration of kdchat.
 
 Every setting is looked up in this order: the settings file (changed from the web console's Settings) > the
 environment (or a .env file) > the built-in default.
@@ -12,8 +12,8 @@ environment (or a .env file) > the built-in default.
 The settings file stores a password only as a salted PBKDF2 hash. "auth": "off" in the file turns off a password
 that comes from the environment (removing it in the console needs the current password).
 
-Where files live: SETTINGS_FILE / STATE_FILE (environment) or VCB_DATA_DIR, else next to app.py when run from
-source, else (the Windows .exe) %APPDATA%\\vrc-chatbox.
+Where files live: SETTINGS_FILE / STATE_FILE (environment) or KDCHAT_DATA_DIR, else next to app.py when run from
+source, else (the Windows .exe) %APPDATA%\\kdchat.
 """
 from __future__ import annotations
 
@@ -29,9 +29,10 @@ import sys
 import threading
 from typing import Any, Optional
 
-log = logging.getLogger("vrc-chatbox")
+log = logging.getLogger("kdchat")
 
-APP_NAME = "vrc-chatbox"
+APP_NAME = "kdchat"
+OLD_APP_NAME = "vrc-chatbox"                   # the name before 1.3.0 (its data folder is moved over)
 DEFAULTS: dict[str, Any] = {"osc_host": "127.0.0.1", "osc_port": 9000, "listen_host": "0.0.0.0", "listen_port": 5555}
 ENV_NAMES = {"osc_host": "VRC_HOST", "osc_port": "VRC_PORT", "listen_host": "LISTEN_HOST", "listen_port": "LISTEN_PORT"}
 PBKDF2_ITERATIONS = 240_000
@@ -53,14 +54,20 @@ def app_dir() -> str:
 
 def data_dir() -> str:
     """where settings.json / state.json / .env are kept"""
-    d = os.getenv("VCB_DATA_DIR")
+    d = os.getenv("KDCHAT_DATA_DIR") or os.getenv("VCB_DATA_DIR")     # (VCB_DATA_DIR: the name before 1.3.0)
     if not d:
         if not frozen():
             d = os.path.dirname(os.path.abspath(__file__))
-        elif os.name == "nt":
-            d = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), APP_NAME)
         else:
-            d = os.path.join(os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), APP_NAME)
+            base = os.getenv("APPDATA") if os.name == "nt" else os.getenv("XDG_CONFIG_HOME")
+            base = base or (os.path.expanduser("~") if os.name == "nt" else os.path.expanduser("~/.config"))
+            d = os.path.join(base, APP_NAME)
+            old = os.path.join(base, OLD_APP_NAME)
+            if not os.path.exists(d) and os.path.isdir(old):
+                try:
+                    os.rename(old, d)                      # settings of the app's old name move along
+                except OSError:
+                    d = old
     os.makedirs(d, exist_ok=True)
     return d
 

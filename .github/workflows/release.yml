@@ -34,12 +34,12 @@ jobs:
       - name: "Install (with the build group: PyInstaller, pywebview)"
         run: uv sync --locked --group build
       - name: Build the .exe
-        run: uv run pyinstaller packaging/vrc-chatbox.spec --noconfirm --clean
+        run: uv run pyinstaller packaging/kdchat.spec --noconfirm --clean
       - name: Smoke test (server only)
         shell: pwsh
         run: |
-          $env:VCB_DATA_DIR = "$env:RUNNER_TEMP\vcb-data"
-          $p = Start-Process -FilePath dist\vrc-chatbox.exe -ArgumentList "--no-window","--host","127.0.0.1","--port","5599" -PassThru
+          $env:KDCHAT_DATA_DIR = "$env:RUNNER_TEMP\kdchat-data"
+          $p = Start-Process -FilePath dist\kdchat.exe -ArgumentList "--no-window","--host","127.0.0.1","--port","5599" -PassThru
           $ok = $false
           for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
             Start-Sleep -Seconds 1
@@ -60,15 +60,15 @@ jobs:
         shell: bash
         run: |
           v=$(uv run python -c "from version import __version__; print(__version__)")
-          f="vrc-chatbox-${v}-windows-x64.exe"
-          mv dist/vrc-chatbox.exe "dist/$f"
+          f="kdchat-${v}-windows-x64.exe"
+          mv dist/kdchat.exe "dist/$f"
           (cd dist && sha256sum "$f" > "$f.sha256")
           echo "file=$f" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.file }}
-          path: dist/vrc-chatbox-*
+          path: dist/kdchat-*
       - name: Release notes from CHANGELOG.md
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -78,7 +78,7 @@ jobs:
             on' CHANGELOG.md > notes.md
           cat >> notes.md <<'EOT'
 
-          **Windows:** download `vrc-chatbox-*-windows-x64.exe` below and run it. Windows SmartScreen may say
+          **Windows:** download `kdchat-*-windows-x64.exe` below and run it. Windows SmartScreen may say
           "Windows protected your PC" (the app is not code-signed): click **More info -> Run anyway**.
           EOT
       - name: GitHub Release
@@ -87,5 +87,5 @@ jobs:
         with:
           body_path: notes.md
           files: |
-            dist/vrc-chatbox-*.exe
-            dist/vrc-chatbox-*.exe.sha256
+            dist/kdchat-*.exe
+            dist/kdchat-*.exe.sha256

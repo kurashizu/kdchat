@@ -105,7 +105,7 @@ const I18N = {
 
     "lan.title": "Use it on your phone",
     "lan.scan": "Scan with your phone's camera (same Wi-Fi), or open:",
-    "lan.hint": "Your phone has to be on the same network. If the page does not open, allow vrc-chatbox in the firewall (Windows asks on the first start).",
+    "lan.hint": "Your phone has to be on the same network. If the page does not open, allow kdchat in the firewall (Windows asks on the first start).",
     "lan.none": "No network address to show: the server only listens on {host}. Change the server address below to use it from your phone.",
     "lan.notice": "No password is set: anyone on your network can use this console.",
     "lan.setPw": "Set a password",
@@ -149,8 +149,8 @@ const I18N = {
     "srv.host": "Listen on (0.0.0.0 = all networks)",
     "srv.port": "HTTP port",
     "srv.save": "Save",
-    "srv.hint": "Takes effect after restarting vrc-chatbox. 127.0.0.1 = this computer only (no phone access).",
-    "srv.restart": "Saved. Restart vrc-chatbox to use the new address.",
+    "srv.hint": "Takes effect after restarting kdchat. 127.0.0.1 = this computer only (no phone access).",
+    "srv.restart": "Saved. Restart kdchat to use the new address.",
     "srv.saved": "Saved",
     "srv.badHost": "Enter an IP address (0.0.0.0, 127.0.0.1, …) or a host name",
 
@@ -331,7 +331,7 @@ const I18N = {
 
     "lan.title": "在手机上用",
     "lan.scan": "用手机相机扫码（同一个 Wi-Fi），或者打开：",
-    "lan.hint": "手机要和这台电脑在同一个网络里。打不开的话，在防火墙里允许 vrc-chatbox（Windows 第一次启动时会问）。",
+    "lan.hint": "手机要和这台电脑在同一个网络里。打不开的话，在防火墙里允许 kdchat（Windows 第一次启动时会问）。",
     "lan.none": "没有可以显示的网络地址：服务只监听 {host}。要在手机上用，请在下面修改服务地址。",
     "lan.notice": "没有设置密码：同一个网络里的人都能使用这个控制台。",
     "lan.setPw": "设置密码",
@@ -375,8 +375,8 @@ const I18N = {
     "srv.host": "监听地址（0.0.0.0 = 所有网络）",
     "srv.port": "HTTP 端口",
     "srv.save": "保存",
-    "srv.hint": "重启 vrc-chatbox 后生效。127.0.0.1 = 只有这台电脑能用（手机连不上）。",
-    "srv.restart": "已保存。重启 vrc-chatbox 后使用新地址。",
+    "srv.hint": "重启 kdchat 后生效。127.0.0.1 = 只有这台电脑能用（手机连不上）。",
+    "srv.restart": "已保存。重启 kdchat 后使用新地址。",
     "srv.saved": "已保存",
     "srv.badHost": "请填 IP 地址（0.0.0.0、127.0.0.1 等）或主机名",
 

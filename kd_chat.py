@@ -1,4 +1,4 @@
-"""Klaude display (kd) output for vrc-chatbox: chat messages on the OSC screen above Klaude's head.
+"""Klaude display (kd) output for kdchat: chat messages on the OSC screen above Klaude's head.
 
 The kd driver library lives in ./kd_display (a copy of the Klaude avatar's display library: kd/, config.json,
 generated/charmap.json + kd_font.png; standard library only, Pillow for pictures). Its config.json must match the

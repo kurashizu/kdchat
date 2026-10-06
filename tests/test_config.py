@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-import vcb_config as cfg
+import kdchat_config as cfg
 
 
 @pytest.mark.parametrize("host,ok", [
@@ -98,3 +98,23 @@ def test_settings_file_permissions(tmp_path):
     s.set_password("pw12")
     if os.name != "nt":
         assert oct(os.stat(tmp_path / "s.json").st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the non-Windows branch (XDG_CONFIG_HOME)")
+def test_old_data_folder_moves_to_the_new_name(tmp_path, monkeypatch):
+    old = tmp_path / "vrc-chatbox"
+    old.mkdir()
+    (old / "settings.json").write_text('{"osc_port": 9001}')
+    monkeypatch.delenv("KDCHAT_DATA_DIR", raising=False)
+    monkeypatch.delenv("VCB_DATA_DIR", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(cfg, "frozen", lambda: True)
+    d = cfg.data_dir()
+    assert d == str(tmp_path / "kdchat") and not old.exists()
+    assert (tmp_path / "kdchat" / "settings.json").read_text() == '{"osc_port": 9001}'
+
+
+def test_old_data_dir_variable_still_works(tmp_path, monkeypatch):
+    monkeypatch.delenv("KDCHAT_DATA_DIR", raising=False)
+    monkeypatch.setenv("VCB_DATA_DIR", str(tmp_path))
+    assert cfg.data_dir() == str(tmp_path)

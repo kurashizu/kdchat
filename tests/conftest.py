@@ -8,15 +8,15 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-_DATA = tempfile.mkdtemp(prefix="vcb-test-")
-os.environ["VCB_DATA_DIR"] = _DATA
+_DATA = tempfile.mkdtemp(prefix="kdchat-test-")
+os.environ["KDCHAT_DATA_DIR"] = _DATA
 os.environ["KD_DRY"] = "1"
 for k in ("AUTH_PASSWORD", "VRC_HOST", "VRC_PORT", "LISTEN_HOST", "LISTEN_PORT", "SETTINGS_FILE", "STATE_FILE",
           "ALLOWED_ORIGINS"):
     os.environ.pop(k, None)
 
 import app as appmod                     # noqa: E402
-import vcb_config as cfg                 # noqa: E402
+import kdchat_config as cfg                 # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pythonosc.osc_message import OscMessage  # noqa: E402
 

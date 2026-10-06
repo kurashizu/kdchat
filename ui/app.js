@@ -8,8 +8,8 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const phone = () => matchMedia("(max-width: 720px)").matches;
 
 const store = {
-  get: (k, d) => { try { const v = localStorage.getItem("vcb." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem("vcb." + k, JSON.stringify(v)); } catch { } },
+  get: (k, d) => { try { const v = localStorage.getItem("kdchat." + k) ?? localStorage.getItem("vcb." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },   // vcb.: before 1.3.0
+  set: (k, v) => { try { localStorage.setItem("kdchat." + k, JSON.stringify(v)); } catch { } },
 };
 
 const S = {

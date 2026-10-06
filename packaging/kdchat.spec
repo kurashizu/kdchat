@@ -1,6 +1,6 @@
-# PyInstaller spec: one-file, windowed vrc-chatbox.exe (also builds on macOS / Linux for testing).
-# Build: uv sync --group build && uv run pyinstaller packaging/vrc-chatbox.spec --noconfirm --clean
-# -> dist/vrc-chatbox(.exe)
+# PyInstaller spec: one-file, windowed kdchat.exe (also builds on macOS / Linux for testing).
+# Build: uv sync --group build && uv run pyinstaller packaging/kdchat.spec --noconfirm --clean
+# -> dist/kdchat(.exe)
 import os
 import sys
 
@@ -31,7 +31,7 @@ datas += [(os.path.join(ROOT, f), ".") for f in ("LICENSE", "THIRD_PARTY_NOTICES
 
 hiddenimports = (
     collect_submodules("uvicorn")
-    + ["kd_chat", "netinfo", "vcb_config", "version", "segno", "psutil"]
+    + ["kd_chat", "netinfo", "kdchat_config", "version", "segno", "psutil"]
     # what kd_display/kd/*.py imports (it is not analysed: it is loaded from the data folder)
     + ["http.server", "copy", "random", "zlib", "struct", "base64", "math", "PIL.Image", "PIL.ImageOps",
        "PIL.ImageEnhance", "PIL.ImageFilter", "PIL.ImageDraw", "PIL.PngImagePlugin", "PIL.JpegImagePlugin",
@@ -49,12 +49,12 @@ if sys.platform == "win32":                    # the version shown in the .exe's
         ffi=FixedFileInfo(filevers=nums, prodvers=nums),
         kids=[StringFileInfo([StringTable("040904B0", [
             StringStruct("CompanyName", "kurashizu"),
-            StringStruct("FileDescription", "vrc-chatbox: VRChat chatbox from your phone"),
+            StringStruct("FileDescription", "kdchat: VRChat chatbox from your phone"),
             StringStruct("FileVersion", __version__),
-            StringStruct("InternalName", "vrc-chatbox"),
+            StringStruct("InternalName", "kdchat"),
             StringStruct("LegalCopyright", "MIT License"),
-            StringStruct("OriginalFilename", "vrc-chatbox.exe"),
-            StringStruct("ProductName", "vrc-chatbox"),
+            StringStruct("OriginalFilename", "kdchat.exe"),
+            StringStruct("ProductName", "kdchat"),
             StringStruct("ProductVersion", __version__)])]),
               VarFileInfo([VarStruct("Translation", [1033, 1200])])])
 
@@ -69,8 +69,8 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
-    name="vrc-chatbox",
-    console=False,                             # a windowed app (the log goes to %APPDATA%\vrc-chatbox)
+    name="kdchat",
+    console=False,                             # a windowed app (the log goes to %APPDATA%\kdchat)
     icon=os.path.join(ROOT, "packaging", "icon.ico"),
     version=version_file,
     upx=False,                                 # UPX-packed files trip antivirus scanners more often

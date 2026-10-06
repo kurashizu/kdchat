@@ -1,10 +1,10 @@
-"""vrc-chatbox: send messages to the VRChat chatbox from a phone or any browser.
+"""kdchat: send messages to the VRChat chatbox from a phone or any browser.
 
 A small web server (FastAPI): a web console at / and a REST API at /api/v1 that turn requests into OSC messages for
 VRChat's chatbox (/chatbox/input, /chatbox/typing). It can also drive the Klaude avatar's pixel display (the "kd"
 output, see kd_chat.py). OSC details: https://docs.vrchat.com/docs/osc-as-input-controller
 
-Configuration: see vcb_config.py (settings file > environment / .env > defaults). The login (HTTP Basic, any user
+Configuration: see kdchat_config.py (settings file > environment / .env > defaults). The login (HTTP Basic, any user
 name) is only required when a password is configured.
 
 Run:  uv run python app.py            (or: uv run uvicorn app:app --host 0.0.0.0 --port 5555)
@@ -37,13 +37,13 @@ from pydantic import BaseModel, Field
 from pythonosc.udp_client import SimpleUDPClient
 
 import netinfo
-import vcb_config as cfg
+import kdchat_config as cfg
 from version import __version__
 
 cfg.load_dotenv(os.path.join(cfg.data_dir(), ".env"))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("vrc-chatbox")
+log = logging.getLogger("kdchat")
 
 try:                                   # Klaude display output (./kd_chat.py + ./kd_display); optional
     import kd_chat
@@ -61,7 +61,7 @@ SETTINGS = cfg.Settings(SETTINGS_FILE)
 
 KD_DRY = os.getenv("KD_DRY", "") not in ("", "0", "false")      # testing: the display encodes but sends nothing
 ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-WWW_AUTH_REALM = "vrc-chatbox"   # (must be ASCII)
+WWW_AUTH_REALM = "kdchat"   # (must be ASCII)
 MODES = ("chatbox", "kd")
 
 # VRChat chatbox limits
@@ -74,7 +74,7 @@ HISTORY_MAX = 50          # messages kept in the server's history (memory only)
 RUNTIME: dict = {"listen_host": None, "listen_port": None}     # what main() / the desktop app actually bound
 _server_at_start: dict = {}                                     # the configured address when the server started
 SESSION_TOKEN: Optional[str] = None     # set by the desktop app: its own window gets in without the password
-SESSION_COOKIE = "vcb_session"
+SESSION_COOKIE = "kdchat_session"
 UI_DIR = os.path.join(cfg.app_dir(), "ui")
 UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascript", "app.css": "text/css",
             "icon.svg": "image/svg+xml"}
@@ -87,12 +87,12 @@ UI_FILES = {"app.js": "application/javascript", "i18n.js": "application/javascri
 async def _lifespan(_app):
     _startup()
     yield
-    log.info("vrc-chatbox stopped")
+    log.info("kdchat stopped")
 
 
 app = FastAPI(
     lifespan=_lifespan,
-    title="vrc-chatbox",
+    title="kdchat",
     description=(
         "Send messages to the VRChat chatbox (OSC) over HTTP.\n\n"
         "🔒 When a password is configured every request needs HTTP Basic auth (any user name, the password).\n\n"
@@ -308,7 +308,7 @@ def _startup() -> None:
         _kd.set_active(_outputs["kd"])
     lh, lp = _listen()
     urls = netinfo.urls(lh, lp)
-    log.info("vrc-chatbox %s | OSC -> udp://%s:%s (%s) | outputs: %s%s | login: %s", __version__, host, port,
+    log.info("kdchat %s | OSC -> udp://%s:%s (%s) | outputs: %s%s | login: %s", __version__, host, port,
              SETTINGS.get("osc_host")[1], _outputs_label(), " (kd dry run)" if KD_DRY else "",
              f"password ({SETTINGS.auth_source()})" if SETTINGS.auth_enabled() else "none")
     log.info("console: http://127.0.0.1:%d/%s", lp, "".join(f"  ·  {u}" for u in urls))
@@ -516,7 +516,7 @@ api = APIRouter(prefix="/api/v1", dependencies=[AuthDep])
 @api.get("/info", response_model=InfoResponse, tags=["meta"], summary="About this service")
 def get_info() -> InfoResponse:
     return InfoResponse(
-        name="vrc-chatbox",
+        name="kdchat",
         version=__version__,
         description="Sends HTTP requests to the VRChat chatbox as OSC messages.",
         vrc_target=f"{_osc['host']}:{_osc['port']}",
@@ -1051,7 +1051,7 @@ def _render_docs_html() -> str:
                         f"</td><td>{html.escape(op.get('summary', ''))}</td></tr>")
     auth = "-u &quot;:$PASSWORD&quot; " if SETTINGS.auth_enabled() else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>vrc-chatbox API</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>kdchat API</title>
 <style>
  body {{ margin: 0 auto; max-width: 900px; padding: 24px 16px 48px; background: #101218; color: #e9e7e3;
         font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }}
@@ -1063,7 +1063,7 @@ def _render_docs_html() -> str:
  .get {{ background: #1f3b2c; color: #7fe0a0; }} .post {{ background: #3b2f1f; color: #ffc27a; }}
  .put, .patch {{ background: #1f2c3b; color: #8ac4ff; }} .delete {{ background: #3b1f1f; color: #ff9a9a; }}
 </style></head><body>
-<h1>🍳 vrc-chatbox API</h1>
+<h1>🍳 kdchat API</h1>
 <p class="sub">v{__version__} · HTTP → OSC for the VRChat chatbox · <a href="/">console</a> · <a href="/swagger">Swagger UI</a> ·
 <a href="/redoc">ReDoc</a> · <a href="/openapi.json">OpenAPI JSON</a></p>
 <h2>Quick start</h2>
@@ -1095,7 +1095,7 @@ def port_free(host: str, port: int) -> Optional[str]:
         return None
     except OSError as e:
         if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1), 10048):
-            return (f"Port {port} is already in use (is vrc-chatbox already running?). Close the other program or "
+            return (f"Port {port} is already in use (is kdchat already running?). Close the other program or "
                     f"choose another port: LISTEN_PORT=<port>, --port <port>, or the Settings of a running console.")
         if e.errno in (errno.EADDRNOTAVAIL, getattr(errno, "WSAEADDRNOTAVAIL", -1), 10049):
             return f"Cannot listen on {host}: this computer has no such address. Use 0.0.0.0 (all networks) or 127.0.0.1."
@@ -1107,10 +1107,10 @@ def port_free(host: str, port: int) -> Optional[str]:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="vrc-chatbox", description="VRChat chatbox web console and REST API")
+    p = argparse.ArgumentParser(prog="kdchat", description="VRChat chatbox web console and REST API")
     p.add_argument("--host", help="bind address for this run (default: settings / LISTEN_HOST / 0.0.0.0)")
     p.add_argument("--port", type=int, help="HTTP port for this run (default: settings / LISTEN_PORT / 5555)")
-    p.add_argument("--version", action="version", version=f"vrc-chatbox {__version__}")
+    p.add_argument("--version", action="version", version=f"kdchat {__version__}")
     a = p.parse_args(argv)
     host = a.host or SETTINGS.value("listen_host")
     port = a.port or SETTINGS.value("listen_port")

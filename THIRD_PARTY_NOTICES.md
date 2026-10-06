@@ -1,6 +1,6 @@
 # Third-party notices
 
-vrc-chatbox itself is released under the [MIT License](LICENSE). It uses the following third-party software. Running
+kdchat itself is released under the [MIT License](LICENSE). It uses the following third-party software. Running
 from source, these are installed by `uv sync`; the Windows `.exe` bundles them. Each keeps its own license; the full
 license texts ship inside each package (in the `.exe`: in its unpacked `*.dist-info` folders) and on the linked
 project pages.

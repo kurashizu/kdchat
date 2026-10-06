@@ -5,7 +5,7 @@ import socket
 import time
 
 import app as appmod
-import vcb_config as cfg
+import kdchat_config as cfg
 from version import __version__
 
 
@@ -63,7 +63,7 @@ def test_desktop_session_cookie(make_client, monkeypatch):
     r = c.get("/?session=wrong", follow_redirects=False)
     assert r.status_code == 303 and "set-cookie" not in r.headers
     r = c.get("/?session=tok123", follow_redirects=False)
-    assert r.status_code == 303 and "vcb_session=tok123" in r.headers["set-cookie"]
+    assert r.status_code == 303 and "kdchat_session=tok123" in r.headers["set-cookie"]
     assert c.get("/api/v1/info").status_code == 200              # (the client keeps the cookie)
 
 
@@ -221,7 +221,7 @@ def test_meta_endpoints(make_client):
     assert c.get("/api/v1/health").json()["version"] == __version__
     assert c.get("/api/v1/config").json()["listen_port"] == 5555
     assert c.get("/openapi.json").status_code == 200
-    assert "vrc-chatbox API" in c.get("/docs").text
+    assert "kdchat API" in c.get("/docs").text
 
 
 def test_port_in_use_message():

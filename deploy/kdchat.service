@@ -1,0 +1,28 @@
+# systemd unit for kdchat on a Linux server. Install (replace USER, and the path if you cloned elsewhere):
+#   sed "s/USER/$USER/g" deploy/kdchat.service | sudo tee /etc/systemd/system/kdchat.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kdchat
+[Unit]
+Description=kdchat: VRChat chatbox web console (HTTP -> OSC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=USER
+WorkingDirectory=/home/USER/kdchat
+# app.py reads .env (password, VRChat address, LISTEN_PORT) and settings.json from its own directory
+ExecStart=/usr/bin/env uv run --project /home/USER/kdchat python app.py
+Restart=on-failure
+RestartSec=3
+# exit code 2 = a configuration problem (e.g. the port is in use): do not restart in a loop
+RestartPreventExitStatus=2
+StandardOutput=append:/home/USER/kdchat/server.log
+StandardError=append:/home/USER/kdchat/server.log
+
+# read-only system directories; the home stays writable (uv writes ~/.cache/uv, the app its settings)
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

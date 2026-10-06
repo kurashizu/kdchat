@@ -1,12 +1,12 @@
-"""vrc-chatbox desktop app (the Windows .exe): starts the server and opens the console in its own window.
+"""kdchat desktop app (the Windows .exe): starts the server and opens the console in its own window.
 
 - The window uses the system's Edge WebView2 (pywebview). Without WebView2 (or pywebview) the console opens in the
   default browser and a small window keeps the server running; closing either window stops the server.
 - The app's own window gets in without the password (a per-run session token), browsers on your phone still need it.
-- Already running (the port answers like vrc-chatbox)? Then the running console is opened instead.
-- No console window in the .exe: the log goes to vrc-chatbox.log in the data folder (%APPDATA%\\vrc-chatbox).
+- Already running (the port answers like kdchat)? Then the running console is opened instead.
+- No console window in the .exe: the log goes to kdchat.log in the data folder (%APPDATA%\\kdchat).
 
-Command line: vrc-chatbox.exe [--no-window] [--port N] [--host H]
+Command line: kdchat.exe [--no-window] [--port N] [--host H]
   --no-window   server only (no window, logs to the console): for servers, scripts and the release smoke test
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ import webbrowser
 
 def _setup_output() -> str:
     """windowed .exe: stdout / stderr are None; send them to a log file (uvicorn writes there)"""
-    import vcb_config as cfg
-    path = os.path.join(cfg.data_dir(), "vrc-chatbox.log")
+    import kdchat_config as cfg
+    path = os.path.join(cfg.data_dir(), "kdchat.log")
     if sys.stdout is None or sys.stderr is None:
         try:
             if os.path.exists(path) and os.path.getsize(path) > 2_000_000:
@@ -60,12 +60,12 @@ def _message(title: str, text: str) -> None:
 
 
 def _already_running(port: int) -> bool:
-    """does 127.0.0.1:port answer like vrc-chatbox"""
+    """does 127.0.0.1:port answer like kdchat"""
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/health", timeout=2) as r:
             return r.status == 200 and b"vrc_host" in r.read()
     except urllib.error.HTTPError as e:                 # 401: has a password
-        return e.code == 401 and "vrc-chatbox" in (e.headers.get("WWW-Authenticate") or "")
+        return e.code == 401 and "kdchat" in (e.headers.get("WWW-Authenticate") or "")
     except Exception:          # noqa: BLE001
         return False
 
@@ -94,12 +94,12 @@ def _webview2_installed() -> bool:
 def _open_window(url: str, title: str) -> bool:
     """the console in a WebView2 window; blocks until it is closed. False if that is not possible."""
     if not _webview2_installed():
-        logging.getLogger("vrc-chatbox").warning("Edge WebView2 is not installed: opening the browser instead")
+        logging.getLogger("kdchat").warning("Edge WebView2 is not installed: opening the browser instead")
         return False
     try:
         import webview
     except Exception as e:     # noqa: BLE001
-        logging.getLogger("vrc-chatbox").warning("no pywebview (%s): opening the browser instead", e)
+        logging.getLogger("kdchat").warning("no pywebview (%s): opening the browser instead", e)
         return False
     try:
         webview.create_window(title, url, width=1120, height=820, min_size=(360, 560), background_color="#101218")
@@ -107,12 +107,12 @@ def _open_window(url: str, title: str) -> bool:
                       storage_path=os.path.join(_data_dir(), "webview"))
         return True
     except Exception as e:     # noqa: BLE001
-        logging.getLogger("vrc-chatbox").warning("the app window failed (%s): opening the browser instead", e)
+        logging.getLogger("kdchat").warning("the app window failed (%s): opening the browser instead", e)
         return False
 
 
 def _data_dir() -> str:
-    import vcb_config as cfg
+    import kdchat_config as cfg
     return cfg.data_dir()
 
 
@@ -126,7 +126,7 @@ def _fallback_window(url: str, lan: list[str], log_path: str) -> None:
         while True:                                      # no GUI at all: run until killed
             time.sleep(3600)
     root = tkinter.Tk()
-    root.title("vrc-chatbox")
+    root.title("kdchat")
     root.resizable(False, False)
     try:
         from version import __version__
@@ -134,11 +134,11 @@ def _fallback_window(url: str, lan: list[str], log_path: str) -> None:
         __version__ = ""
     f = ttk.Frame(root, padding=16)
     f.grid()
-    ttk.Label(f, text=f"vrc-chatbox {__version__} is running", font=("Segoe UI", 12, "bold")).grid(sticky="w")
+    ttk.Label(f, text=f"kdchat {__version__} is running", font=("Segoe UI", 12, "bold")).grid(sticky="w")
     ttk.Label(f, text="Console: " + url.split("?")[0]).grid(sticky="w", pady=(8, 0))
     for u in lan:
         ttk.Label(f, text="On your phone: " + u).grid(sticky="w")
-    ttk.Label(f, text="Closing this window stops vrc-chatbox.", foreground="#666").grid(sticky="w", pady=(8, 8))
+    ttk.Label(f, text="Closing this window stops kdchat.", foreground="#666").grid(sticky="w", pady=(8, 8))
     b = ttk.Frame(f)
     b.grid(sticky="w")
     ttk.Button(b, text="Open in browser", command=lambda: webbrowser.open(url)).grid(row=0, column=0, padx=(0, 8))
@@ -149,7 +149,7 @@ def _fallback_window(url: str, lan: list[str], log_path: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="vrc-chatbox")
+    p = argparse.ArgumentParser(prog="kdchat")
     p.add_argument("--no-window", action="store_true", help="server only, no window")
     p.add_argument("--host", help="bind address for this run")
     p.add_argument("--port", type=int, help="HTTP port for this run")
@@ -173,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         if _already_running(port):                       # a second start: show the running one
             webbrowser.open(f"http://127.0.0.1:{port}/")
             return 0
-        _message("vrc-chatbox", problem)
+        _message("kdchat", problem)
         return 2
 
     token = secrets.token_urlsafe(24)
@@ -189,13 +189,13 @@ def main(argv: list[str] | None = None) -> int:
             break
         time.sleep(0.05)
     if not server.started:
-        _message("vrc-chatbox", f"The server did not start. Details: {log_path}")
+        _message("kdchat", f"The server did not start. Details: {log_path}")
         return 1
 
     url = f"http://127.0.0.1:{port}/?session={token}"
     try:
         from version import __version__
-        if not _open_window(url, f"vrc-chatbox {__version__}"):
+        if not _open_window(url, f"kdchat {__version__}"):
             import netinfo
             _fallback_window(url, netinfo.urls(host, port), log_path)
     finally:
