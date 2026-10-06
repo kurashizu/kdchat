@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from pythonosc.udp_client import SimpleUDPClient
 
 import netinfo
+import translate as tr
 import kdchat_config as cfg
 from version import __version__
 
@@ -164,7 +165,7 @@ def _load_state() -> dict:
 
 def _save_state() -> None:
     with _state_lock:
-        data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {})}
+        data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {}), "translate": _tr_settings}
         tmp = STATE_FILE + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -306,6 +307,11 @@ def _startup() -> None:
         _outputs["kd"] = False
     if _kd is not None:
         _kd.set_active(_outputs["kd"])
+    try:
+        _tr_settings.update(_tr_clean(st.get("translate") or {}, _TR_DEFAULTS))
+    except (ValueError, TypeError) as e:
+        log.warning("translation settings ignored: %s", e)
+    _tr_apply()
     lh, lp = _listen()
     urls = netinfo.urls(lh, lp)
     log.info("kdchat %s | OSC -> udp://%s:%s (%s) | outputs: %s%s | login: %s", __version__, host, port,
@@ -379,6 +385,8 @@ class MessageItem(BaseModel):
     kd_id: Optional[int] = Field(None, description="Its number on the Klaude display (display messages only)")
     final: bool = Field(True, description="False = still being typed")
     targets: list[str] = Field(default_factory=list, description="The outputs it went to")
+    source_lang: Optional[str] = Field(None, description="Its language (translation on)")
+    translations: dict[str, str] = Field(default_factory=dict, description="Language code -> translated text")
 
 
 class MessageEdit(BaseModel):
@@ -541,6 +549,111 @@ def get_health() -> HealthResponse:
                           max_lines=MAX_LINES, auth_enabled=SETTINGS.auth_enabled(), error=err)
 
 
+# ---------------------------------------------------------------- translation (local, translate.py)
+
+_TR_DEFAULTS = {"enabled": False, "source": "auto", "latin": "en", "targets": [], "chatbox": 1, "kd": True}
+_tr_settings: dict = dict(_TR_DEFAULTS)
+_tr_models = tr.Models(cfg.data_dir())
+_tr_engine = tr.Engine(_tr_models)
+_tr_downloads: dict = {}          # lang -> thread
+
+
+def _tr_clean(body: dict, old: dict) -> dict:
+    s = dict(old)
+    for k, v in (body or {}).items():
+        if k not in _TR_DEFAULTS:
+            continue
+        if k in ("enabled", "kd"):
+            v = bool(v)
+        elif k == "chatbox":
+            v = int(v)
+            if not 0 <= v <= 2:
+                raise ValueError("chatbox: how many translations the game chatbox gets, 0..2")
+        elif k == "source":
+            if v != "auto" and v not in tr.LANGUAGES:
+                raise ValueError(f"source: auto or a language code, not {v!r}")
+        elif k == "latin":
+            if v not in tr.LANGUAGES:
+                raise ValueError(f"latin: a language code, not {v!r}")
+        elif k == "targets":
+            v = [x for i, x in enumerate(v or []) if x not in (v or [])[:i]]
+            if len(v) > 2 or any(x not in tr.LANGUAGES for x in v):
+                raise ValueError("targets: at most 2 language codes")
+        s[k] = v
+    return s
+
+
+def _tr_tag(code: str) -> str:
+    return {"zh": "ZH", "zh_hant": "ZH-T"}.get(code, code.upper())
+
+
+def _tr_wings_on() -> bool:
+    st = _tr_settings
+    return bool(st["enabled"] and st["kd"] and st["targets"])
+
+
+def _tr_apply() -> None:
+    """the side screens' text regions follow the setting; models load in the background (the first message is quick)"""
+    if _kd is not None:
+        _kd.set_wing_text_on(_tr_wings_on())
+    st = _tr_settings
+    if st["enabled"] and st["targets"]:
+        src = st["source"] if st["source"] != "auto" else st["latin"]
+        def warm():
+            for t in st["targets"]:
+                try:
+                    if t != src and _tr_engine.ready(src, t):
+                        _tr_engine.translate("ok", src, t)
+                except Exception as e:     # noqa: BLE001
+                    log.info("translation warm-up (%s -> %s): %s", src, t, e)
+        threading.Thread(target=warm, name="tr-warm", daemon=True).start()
+
+
+def _translate(text: str) -> tuple[Optional[str], dict]:
+    """-> (its language, {target: translation}) with the translation on; models not downloaded are left out"""
+    st = _tr_settings
+    if not (st["enabled"] and st["targets"]) or not text.strip():
+        return None, {}
+    src = tr.detect(text, st["source"], st["latin"])
+    out = {}
+    for t in st["targets"]:
+        if t == src:
+            continue
+        try:
+            out[t] = _tr_engine.translate(text, src, t)
+        except LookupError as e:
+            log.info("translation skipped: %s", e)
+        except Exception as e:     # noqa: BLE001
+            log.warning("translation failed (%s -> %s): %r", src, t, e)
+    return src, out
+
+
+def _chatbox_compose(text: str, trs: dict) -> str:
+    """the original + up to `chatbox` translations, as many as fit the game chatbox (144 characters, 9 lines); a
+    translation that does not fit whole is shortened (…) when at least a few characters of it fit"""
+    n = _tr_settings["chatbox"]
+    out = text
+    for t in [x for x in _tr_settings["targets"] if x in trs][:n]:
+        cand = out + "\n" + trs[t]
+        if len(cand) <= MAX_CHARS and cand.count("\n") + 1 <= MAX_LINES:
+            out = cand
+            continue
+        room = MAX_CHARS - len(out) - 2
+        if room >= 12 and out.count("\n") + 2 <= MAX_LINES:
+            out = out + "\n" + trs[t].replace("\n", " ")[:room].rstrip() + "…"
+        break
+    return out
+
+
+def _kd_wings(trs: dict) -> None:
+    """the newest message's translations on the side screens (one target: the right one)"""
+    if _kd is None or not _tr_wings_on():
+        return
+    ts = [t for t in _tr_settings["targets"]]
+    sides = {"right": ts[0]} if len(ts) == 1 else {"left": ts[0], "right": ts[1]}
+    _kd.set_wing_text({side: ((trs[t], _tr_tag(t)) if t in trs else None) for side, t in sides.items()})
+
+
 class _ChatboxThrottle:
     """VRChat rate-limits the chatbox: live updates at most every 1.5 s (always the newest text), final ones at once"""
     GAP = 1.5
@@ -600,13 +713,16 @@ def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
             _chatbox_send(text, False, False)
         return MessageItem(id=0, text=text, immediate=False, sfx=False, output="chatbox",
                            created_at=datetime.now(timezone.utc).isoformat(), length=len(text), targets=["chatbox"])
+    src, trs = _translate(text) if final else (None, {})
     if use["chatbox"]:
-        _cb.send(text, final, bool(req.sfx))                   # (first: an OSC error must not leave a kd message)
+        _cb.send(_chatbox_compose(text, trs) if final else text, final, bool(req.sfx))   # (first: an OSC error must not leave a kd message)
     kd_id = _kd.new_message(text, final, bool(req.sfx)) if use["kd"] and _kd is not None else None
+    if final and use["kd"]:
+        _kd_wings(trs)
     targets = [k for k in ("chatbox", "kd") if use[k]]
     msg = MessageItem(output="+".join(targets), id=_next_message_id(), text=text, immediate=True, sfx=bool(req.sfx),
                       created_at=datetime.now(timezone.utc).isoformat(), length=len(text), kd_id=kd_id,
-                      final=final, targets=targets)
+                      final=final, targets=targets, source_lang=src, translations=trs)
     with _history_lock:
         _history.append(msg)
     log.info("send: id=%d len=%d final=%s to=%s user=%s", msg.id, msg.length, final, msg.output, user)
@@ -638,23 +754,35 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
     done = body.final or body.cancel
     if not msg.final:
         # a new message still being typed: update it, final = sent (the chime, if asked for, plays now)
+        src, trs = _translate(text) if done and not body.cancel else (None, {})
         if use["kd"] and _kd is not None:
             _kd.update_message(msg.kd_id, text, final=True if done else None, sfx=done and msg.sfx)
+            if done:
+                _kd_wings(trs)
         if use["chatbox"] and latest_cb is msg:
-            _cb.send(text, done, done and msg.sfx)
+            _cb.send(_chatbox_compose(text, trs) if done else text, done, done and msg.sfx)
         msg.text, msg.length = text, len(text)
         msg.final = done
+        if done:
+            msg.source_lang, msg.translations = src, trs
         return msg
     # editing a sent message (live while typing, then final; cancel = back to the text the client had)
     was = _edit_sessions.setdefault(msg.id, msg.edited)
     edited = was if body.cancel else True
     if done:
         _edit_sessions.pop(msg.id, None)
+    src, trs = _translate(text) if done else (None, {})
     if use["kd"] and _kd is not None:
         _kd.update_message(msg.kd_id, text, edited=edited)
+        with _history_lock:
+            newest_kd = next((m for m in reversed(_history) if m.kd_id is not None and m.final), None)
+        if done and newest_kd is msg:
+            _kd_wings(trs)
     if use["chatbox"] and latest_cb is msg:
-        _cb.send(text, done, False)                              # the game only shows its newest message
+        _cb.send(_chatbox_compose(text, trs) if done else text, done, False)   # the game only shows its newest message
     msg.text, msg.length, msg.edited = text, len(text), edited
+    if done:
+        msg.source_lang, msg.translations = src, trs
     if done:
         log.info("edit: id=%d cancel=%s user=%s", msg.id, body.cancel, user)
     return msg
@@ -918,6 +1046,78 @@ def get_settings(request: Request) -> dict:
             "network": _network_body(request), "warning": SETTINGS.warning}
 
 
+# ---------------------------------------------------------------- translation
+
+
+@api.get("/translate", tags=["translate"], summary="Translation settings and languages")
+def get_translate() -> dict:
+    """settings: enabled, source (auto or a language code: the language you type), latin (your language when you type
+    latin script and source is auto), targets (up to 2: shown with the original), chatbox (how many translations the
+    game chatbox gets, 0-2), kd (on the Klaude display's side screens). languages: every language with its download
+    state (ready / downloading / error / absent), size and progress. Models are downloaded on request only."""
+    return {"settings": _tr_settings, "languages": _tr_models.status(), "models": tr.MODELS_TAG}
+
+
+@api.put("/translate", tags=["translate"], summary="Change translation settings (partial update)")
+def put_translate(body: dict, user: str = AuthDep) -> dict:
+    global _tr_settings
+    try:
+        new = _tr_clean(body, _tr_settings)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _tr_settings = new
+    _tr_apply()
+    _save_state()
+    log.info("translate settings: %s user=%s", body, user)
+    return {"settings": _tr_settings}
+
+
+@api.post("/translate/models/{code}", status_code=status.HTTP_202_ACCEPTED, tags=["translate"],
+          summary="Download a language (both directions to and from English)")
+def download_language(code: str, user: str = AuthDep) -> dict:
+    if code not in tr.LANGUAGES:
+        raise HTTPException(status_code=404, detail=f"Unknown language {code}")
+    if _tr_models.installed(code):
+        return {"state": "ready"}
+    th = _tr_downloads.get(code)
+    if th is None or not th.is_alive():
+        def run():
+            try:
+                _tr_models.download(code)
+                _tr_apply()
+            except Exception:     # noqa: BLE001  (reported through the languages' state)
+                pass
+        th = threading.Thread(target=run, name=f"tr-dl-{code}", daemon=True)
+        _tr_downloads[code] = th
+        th.start()
+        log.info("translation model download: %s user=%s", code, user)
+    return {"state": "downloading"}
+
+
+@api.delete("/translate/models/{code}", status_code=status.HTTP_204_NO_CONTENT, tags=["translate"],
+            summary="Delete a downloaded language", response_class=Response)
+def delete_language(code: str, user: str = AuthDep) -> Response:
+    if code not in tr.LANGUAGES:
+        raise HTTPException(status_code=404, detail=f"Unknown language {code}")
+    with _tr_engine.lock:
+        for p in _tr_models.pairs(code):
+            if p in _tr_engine.loaded and _tr_engine.ctx is not None:
+                _tr_engine.ctx.call("kd_unload", p)
+                _tr_engine.loaded.pop(p, None)
+        _tr_models.delete(code)
+    return Response(status_code=204)
+
+
+class TranslateTry(BaseModel):
+    text: str
+
+
+@api.post("/translate/try", tags=["translate"], summary="Translate a text with the current settings (nothing is sent)")
+def translate_try(body: TranslateTry, user: str = AuthDep) -> dict:
+    src, trs = _translate(body.text)
+    return {"source": src, "translations": trs, "chatbox": _chatbox_compose(body.text, trs)}
+
+
 # ---------------------------------------------------------------- the Klaude display
 
 
@@ -965,10 +1165,14 @@ def kd_chime(user: str = AuthDep) -> Response:
 
 
 @api.post("/kd/image", tags=["kd"], summary="Show a picture on the display")
-async def kd_image(request: Request, user: str = AuthDep) -> dict:
+async def kd_image(request: Request, user: str = AuthDep,
+                   screen: str = Query("main", description="main, left or right (a side screen)")) -> dict:
     """Body = the image file itself (png / jpg / webp / gif…, at most 10 MB). It is cropped, its contrast and
     colours adjusted, shown with 16 colours (10 taken from the picture) under the header until the next message or
-    DELETE /kd/image."""
+    DELETE /kd/image. screen=left / right puts it on a side screen: up to three pictures at once; they share the
+    graphics memory, so then all of them use the low resolution (2x2 px dots) and one palette."""
+    if screen not in ("main", "left", "right"):
+        raise HTTPException(status_code=400, detail="screen must be main, left or right")
     k = _need_kd()
     data = await request.body()
     if not data:
@@ -976,7 +1180,7 @@ async def kd_image(request: Request, user: str = AuthDep) -> dict:
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image too large (at most 10 MB)")
     try:
-        info = await run_in_threadpool(k.show_image, data)
+        info = await run_in_threadpool(k.show_image, data, screen)
     except Exception as e:     # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Cannot read the image: {e}")
     log.info("kd image: %d B user=%s", len(data), user)
@@ -985,8 +1189,11 @@ async def kd_image(request: Request, user: str = AuthDep) -> dict:
 
 @api.delete("/kd/image", status_code=status.HTTP_204_NO_CONTENT, tags=["kd"], summary="Close the picture",
             response_class=Response)
-def kd_image_close(user: str = AuthDep) -> Response:
-    _need_kd().close_image()
+def kd_image_close(user: str = AuthDep,
+                   screen: Optional[str] = Query(None, description="main, left or right; none = all")) -> Response:
+    if screen not in (None, "main", "left", "right"):
+        raise HTTPException(status_code=400, detail="screen must be main, left or right")
+    _need_kd().close_image(screen)
     return Response(status_code=204)
 
 

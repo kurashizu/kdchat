@@ -11,7 +11,8 @@ class Charmap:
         with open(path or os.path.join(ROOT, "generated", "charmap.json"), encoding="utf-8") as f:
             cm = json.load(f)
         self.version = cm["version"]
-        self.table = cm["table"]
+        t = cm["table"]
+        self.table = [ord(ch) for ch in t] if isinstance(t, str) else t     # (a string since the compact charmap)
         self.n_ascii, self.n_common = cm["ascii"], cm["common"]
         self.index = {cp: i for i, cp in enumerate(self.table)}
 
@@ -106,16 +107,17 @@ class Memory:
             self.buf[self.cfg.pal_base + 2 * i + 1] = v & 255
 
     # ---------------- graphics
-    def set_gfx(self, pixels):
+    def set_gfx(self, pixels, tile0=0):
         """pixels: GH rows of GW palette indices -> RAW mode. Each 8x8 tile keeps at most 2^bpp colours: if it has more,
-        the set with the smallest total RGB error is kept and the other pixels take their nearest kept colour."""
+        the set with the smallest total RGB error is kept and the other pixels take their nearest kept colour.
+        tile0: first tile (a wing's picture: config wings.tiles)."""
         c = self.cfg
         K = c.colors_per_tile
         pal = self.palette
         err = [[sum((a - b) ** 2 for a, b in zip(pal[i], pal[j])) for j in range(16)] for i in range(16)]
         for ty in range(c.tiles_y):
             for tx in range(c.tiles_x):
-                t = ty * c.tiles_x + tx
+                t = tile0 + ty * c.tiles_x + tx
                 cells = [pixels[ty * 8 + y][tx * 8 + x] & 15 for y in range(8) for x in range(8)]
                 counts = {}
                 for v in cells:
@@ -189,7 +191,42 @@ class Memory:
             return c.hdr_bytes + r.skip
         return c.hdr_bytes + (len(r.codes) * c.code_bits[MODE_ASCII if r.mode in (MODE_TINY, MODE_SMALL) else r.mode] + 7) // 8
 
-    def set_runs(self, runs):
+    def set_text(self, main, wings=None, wing_pages=(0, 0)):
+        """the text area with side-screen regions: main runs first, then (when wings has runs) the left wing's region
+        (wing_pages[0] pages) and the right wing's (wing_pages[1]) at the END of the area, each starting on its own page.
+        The main part is padded up to the first region (the walk must reach it); wing runs use the wing's own screen
+        coordinates. Sets wing_tl / wing_tr (first page of each region, 0 = none). -> (bytes, glyphs) like set_runs"""
+        c, P = self.cfg, self.cfg.P
+        wings = wings or {}
+        npg = [wing_pages[k] if wings.get(k) else 0 for k in (0, 1)]
+        total = c.text_bytes // P
+        if not any(npg):
+            if "wing_tl" in c.regs:
+                self.reg("wing_tl", 0); self.reg("wing_tr", 0)
+            return self.set_runs(main)
+        assert sum(npg) < total, "wing regions take the whole text area"
+        tl = total - npg[0] - npg[1]
+        tr = total - npg[1]
+        self.reg("wing_tl", tl if npg[0] else 0); self.reg("wing_tr", tr if npg[1] else 0)
+        used, glyphs = self.set_runs(main, limit=tl * P, fill=True)
+        dropped, index = self.dropped, self.run_index         # (run_index: the main runs, for text_move)
+        if self.fill_failed:                          # the 64-run limit: the wings cannot be reached this time
+            self.reg("wing_tl", 0); self.reg("wing_tr", 0)
+            self.buf[c.text_base + tl * P:c.text_base + c.text_bytes] = bytes(c.text_bytes - tl * P)
+            self.dropped = dropped + sum(len(r.codes) for k in (0, 1) for r in (wings.get(k) or []) if isinstance(r, Run))
+            self.run_index = index
+            return used, glyphs
+        counts = (self._runs, glyphs)
+        if npg[0]:
+            u, g = self.set_runs(wings[0], base=tl * P, limit=npg[0] * P, fill=bool(npg[1]), counts=counts)
+            dropped += self.dropped; glyphs = g; counts = (self._runs, g)
+        if npg[1]:
+            u, g = self.set_runs(wings[1], base=tr * P, limit=npg[1] * P, counts=counts)
+            dropped += self.dropped; glyphs = g
+        self.dropped, self.run_index = dropped, index
+        return used, glyphs
+
+    def set_runs(self, runs, base=0, limit=None, fill=False, counts=(0, 0)):
         """pack runs (and Page markers) into the text area, in order, up to the first run that does not fit (runs, glyphs,
         bytes); self.dropped = glyphs left out (that run and all after it, so later text never shows while earlier text
         is missing). No terminator is needed when fewer than hdr_bytes bytes are left: the decoders stop there anyway.
@@ -199,7 +236,8 @@ class Memory:
         c = self.cfg
         P = c.P
         out = bytearray()
-        n_glyphs = n_runs = 0
+        n_runs, n_glyphs = counts                     # (earlier regions count against the same limits)
+        limit = c.text_bytes - base if limit is None else limit
         self.dropped = 0
         self.run_index = [None] * len(runs)
         prev = None                                   # (x, y, end x) of the last packed run
@@ -241,7 +279,7 @@ class Memory:
             for code in r.codes:
                 w.put(code, cb)
             b = w.bytes()
-            if (n_runs + 1 > c.max_runs or n_glyphs + len(r.codes) > c.max_glyphs or len(out) + len(b) > c.text_bytes):
+            if (n_runs + 1 > c.max_runs or n_glyphs + len(r.codes) > c.max_glyphs or len(out) + len(b) > limit):
                 return None
             out += b
             n_glyphs += len(r.codes); n_runs += 1
@@ -355,9 +393,16 @@ class Memory:
             if stop:
                 break
             self.run_index[i] = first
-        area = bytearray(c.text_bytes)
+        if fill and len(out) < limit:
+            # pad to the region's end with skip runs: the walk goes on into the next region (a zero header would end it)
+            while len(out) < limit and pad(0, 0, True):
+                pass
+        self.fill_failed = fill and len(out) < limit   # (out of runs: the regions after it cannot be reached)
+        area = bytearray(limit)
         area[:len(out)] = out                       # zero header after the last run = end
-        self.buf[c.text_base:c.text_base + c.text_bytes] = area
+        assert len(area) == limit, (len(area), limit)
+        self.buf[c.text_base + base:c.text_base + base + limit] = area
+        self._runs = n_runs
         return len(out), n_glyphs
 
     # ---------------- sprites

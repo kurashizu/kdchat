@@ -52,7 +52,7 @@ def chroma(buf, c, tx, ty):
     return ((v >> 4) - q // 2) / q, ((v & 15) - q // 2) / q
 
 
-def gfx_buffer(buf, c, pal):
+def gfx_buffer(buf, c, pal, tile0=0):
     """the graphics plane at zoom 1 in screen units (W x H), no offset: what the tiles hold"""
     W, H, S = c.W, c.H, c.gscale
     img = [[(0.0, 0.0, 0.0)] * W for _ in range(H)]
@@ -62,7 +62,7 @@ def gfx_buffer(buf, c, pal):
     L = (1 << (c.ac_bits - 1)) - 1
     for ty in range(c.tiles_y):
         for tx in range(c.tiles_x):
-            mt = ty * c.tiles_x + tx
+            mt = tile0 + ty * c.tiles_x + tx
             if mode == 0:
                 ev = 0
                 for b in range(c.tc_bytes_per):
@@ -136,10 +136,36 @@ def fx_pixel(c, e, a, sx, sy):
     return 1.0                                  # slides move the content instead
 
 
-def render(mem, font_png=None, t=0.0, fx_time=None):
+def routes(buf, c):
+    """the wing routing registers -> functions: text page -> screen, shape slot -> screen, sprite -> screen, tile0 per wing"""
+    R = lambda n: buf[c.regs[n]] if n in c.regs else 0
+    tl, tr = R("wing_tl"), R("wing_tr")
+    shp, spr = R("wing_shp"), R("wing_spr")
+    sl, sr = shp >> 4, shp & 15
+
+    def text(page):
+        if tr and page >= tr:
+            return 2
+        return 1 if tl and page >= tl else 0
+
+    def shape(i):
+        if sr and i >= sr:
+            return 2
+        return 1 if sl and i >= sl else 0
+    return text, shape, (lambda i: (spr >> (2 * i)) & 3), {1: R("wing_gl"), 2: R("wing_gr")}
+
+
+def wings_open(mem):
+    """does the register say the side screens are unfolded (show bit 1)?"""
+    c = mem.cfg
+    return "show" in c.regs and bool(mem.buf[c.regs["show"]] & 2) and bool(mem.buf[c.regs["flags"]] & FLAG_ON)
+
+
+def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
     """-> H rows of W (r, g, b) floats 0..1 (all black when the display is off).
     t = the viewer's clock in seconds (auto-scroll, palette cycling, blinking); fx_time = seconds since the transition
-    register reached the viewer (None = long ago: the transition has finished)."""
+    register reached the viewer (None = long ago: the transition has finished). screen 1 / 2 = the left / right wing
+    (its own coordinates; no scrolling, transitions or graphics window there)."""
     c = mem.cfg
     buf = mem.buf
     if "screen" in c.regs and len(c.sizes) > 1:
@@ -150,9 +176,10 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
     if not flags & FLAG_ON:
         return [[(0.0, 0.0, 0.0)] * W for _ in range(H)]
     pal = lambda i: pal_rgb(buf, c, pal_index(buf, c, i, t))
+    route_text, route_shape, route_sprite, wing_tile0 = routes(buf, c)
     bv = R("blink_view")
-    z = (1, 2, 4, 1)[bv & 3]
-    e, a = fx_visibility(c, R("fx"), fx_time)
+    z = (1, 2, 4, 1)[bv & 3] if screen == 0 else 1
+    e, a = fx_visibility(c, R("fx"), fx_time) if screen == 0 else (0, 1.0)
     # slides move every layer (in the shader: the quads), the screen background stays
     shx = round((1 - a) * W) if e == 4 else 0
     shy = round((1 - a) * H) if e == 5 else 0
@@ -173,12 +200,12 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
         for i in range(c.shp_n):
             a0 = c.shp_base + i * c.shp_bytes_per
             sh = Shape(buf[a0:a0 + c.shp_bytes_per], c.shp_off)
-            if sh.kind:
+            if sh.kind and route_shape(i) == screen:
                 shp.append((i, sh))
-        sox = math.floor(R("shape_x") + s8(R("shape_vx")) * (t % W)) % W if "shape_x" in c.regs else 0
-        soy = math.floor(R("shape_y") + s8(R("shape_vy")) * (t % H)) % H if "shape_y" in c.regs else 0
-        gox = math.floor(R("gfx_x") + s8(R("gfx_vx")) * (t % W)) % W
-        goy = math.floor(R("gfx_y") + s8(R("gfx_vy")) * (t % H)) % H
+        sox = math.floor(R("shape_x") + s8(R("shape_vx")) * (t % W)) % W if "shape_x" in c.regs and not screen else 0
+        soy = math.floor(R("shape_y") + s8(R("shape_vy")) * (t % H)) % H if "shape_y" in c.regs and not screen else 0
+        gox = math.floor(R("gfx_x") + s8(R("gfx_vx")) * (t % W)) % W if not screen else 0
+        goy = math.floor(R("gfx_y") + s8(R("gfx_vy")) * (t % H)) % H if not screen else 0
 
     def shape_pixels(sh):
         """screen pixels to test for a shape (its bounding box grown for rotation / pulse, or everything)"""
@@ -207,7 +234,12 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
                 else:
                     put(x, y, pal(v), lift)
 
-    if flags & FLAG_GFX:
+    if flags & FLAG_GFX and screen and wing_tile0[screen]:
+        gb = gfx_buffer(buf, c, pal, wing_tile0[screen])       # a wing's picture: no offset, zoom or window
+        for sy in range(H):
+            for sx in range(W):
+                put(sx, sy, gb[sy][sx])
+    elif flags & FLAG_GFX and not screen:
         gb = gfx_buffer(buf, c, pal)
         ox = math.floor(R("gfx_x") + s8(R("gfx_vx")) * (t % W)) % W
         oy = math.floor(R("gfx_y") + s8(R("gfx_vy")) * (t % H)) % H
@@ -235,7 +267,7 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
         for i in range(c.spr_n):
             a0 = c.spr_regs + 3 * i
             x, y, attr = buf[a0] - c.spr_off, buf[a0 + 1] - c.spr_off, buf[a0 + 2]
-            if not attr & 1 or bool(attr & 16) != above:
+            if not attr & 1 or bool(attr & 16) != above or route_sprite(i) != screen:
                 continue
             sc = 2 if attr & 8 else 1
             n = c.spr_size
@@ -293,9 +325,10 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
             cb = c.code_bits[0] if mode == 3 else c.code_bits.get(mode, c.code_bits[2])   # like the shader: 2 / 3 read as extended
             adv = 4 if tiny else 6 if small else ((c.half if mode == 0 else c.cell) + c.gap) * scale
             gh = 5 if tiny else 7 if small else c.cell * scale
-            moving = mv == 0 or r + 1 >= mv
+            rs = route_text((off - tb) // c.P)
+            moving = (mv == 0 or r + 1 >= mv) and rs == 0       # wing text never moves
             fgc, bgc = pal(fg), pal(bg)
-            if not skip:
+            if not skip and rs == screen:
                 for i in range(n):
                     if cum + i >= c.max_glyphs:
                         break
@@ -322,7 +355,8 @@ def render(mem, font_png=None, t=0.0, fx_time=None):
                                 put(sx, sy, fgc, 0.6)
                             elif box:
                                 put(sx, sy, bgc, 0.6)
-                cum += n
+            if not skip:
+                cum += n                                # glyph slots count every screen's glyphs
             px0, py0, pend = rx, ry, (rx if skip else rx + n * adv)
             off += c.hdr_bytes + (n if skip else (n * cb + 7) // 8)
     shapes(True)

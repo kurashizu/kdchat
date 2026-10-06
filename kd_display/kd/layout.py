@@ -102,6 +102,29 @@ class Layout:
             out.extend(lines if lines else [[]])
         return out
 
+    def _unify(self, line):
+        """mixed kana / hanzi + extended kanji (Japanese: 気, 読 ... are extended glyphs) would switch modes all the time,
+        each switch a new run header: a stretch of full-width glyphs that mixes both is written in the extended mode
+        alone when that takes fewer bits (an extended code can name any glyph; ASCII stays half width, its own mode)"""
+        from .config import MODE_COMMON, MODE_EXT
+        cb, hdr = self.cfg.code_bits, 8 * self.cfg.hdr_bytes
+        out, i, n = list(line), 0, len(line)
+        while i < n:
+            if out[i][0] not in (MODE_COMMON, MODE_EXT):
+                i += 1
+                continue
+            j = i
+            while j < n and out[j][0] in (MODE_COMMON, MODE_EXT):
+                j += 1
+            seg = out[i:j]
+            runs = 1 + sum(1 for a, b in zip(seg, seg[1:]) if a[0] != b[0])
+            if runs > 1:
+                split = runs * hdr + sum(cb[m] for m, _, _, _ in seg)
+                if hdr + len(seg) * cb[MODE_EXT] < split:
+                    out[i:j] = [(MODE_EXT, c + self.cm.n_ascii if m == MODE_COMMON else c, a, ch) for m, c, a, ch in seg]
+            i = j
+        return out
+
     def runs(self, text, x=0, y=0, width=None, align="left", scale=1, fg=1, bg=0, box=False, wrap=True, line_h=None,
              clip=True):
         """clip: leave out lines below / above the screen and glyphs past its right edge (the text space wraps around,
@@ -126,7 +149,7 @@ class Layout:
                 self.clipped += len(line)
                 continue
             cx, cur = lx, None
-            for mode, code, adv, ch in line:
+            for mode, code, adv, ch in self._unify(line):
                 if clip and (cx >= W or cx < 0):            # glyphs left / right of the screen
                     self.clipped += 1
                     cx += adv

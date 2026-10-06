@@ -11,6 +11,7 @@ Before 1.3.0 kdchat was called vrc-chatbox. The Windows app moves its old data f
 
 - [Settings](#settings)
 - [The Klaude display](#the-klaude-display)
+- [Translation](#translation)
 - [Run from source (Windows, macOS, Linux)](#run-from-source-windows-macos-linux)
 - [Self-hosting on a Linux server (systemd)](#self-hosting-on-a-linux-server-systemd)
 - [Configuration reference](#configuration-reference)
@@ -55,6 +56,20 @@ affected).
   version** (otherwise the screen stays black or shows garbage). When both change, upload the avatar first, then update this.
 - The avatar: [Klaude on VRChat](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136).
 - One frame is sent about every 0.3 s; people who join later get the full picture from the refresh cycle.
+
+## Translation
+
+Settings → Translation (or `PUT /api/v1/translate`): `enabled`, `source` (`auto` or the language you type; with `auto`,
+`latin` = your language when you type Latin script), `targets` (up to 2), `chatbox` (how many translations the game
+chatbox gets: 0-2; the original always comes first, translations are shortened with … to fit 144 characters / 9 lines),
+`kd` (on the Klaude display's side screens: the first target on the left, the second on the right; one target: right).
+
+The engine is Mozilla's Firefox Translations (Bergamot, WebAssembly) running inside kdchat through an embedded V8
+(mini-racer), on the CPU of the machine that runs kdchat: a server deployment translates on the server. Models are
+downloaded per language on request from the GitHub release `models-2026.10` (a mirror of Mozilla's models, see
+`tools/mirror_models.py`) into `<data folder>/models/`, checked with SHA-256. Every model translates to or from
+English; other pairs go through English. Two loaded directions take about 0.7 GB of memory; a message takes about
+0.1 s per language.
 
 ## Run from source (Windows, macOS, Linux)
 
@@ -190,6 +205,10 @@ curl -u ":$PASSWORD" http://localhost:5555/api/v1/health
 Limits: the game chatbox takes at most 144 characters and 9 lines (longer = `400`); when only the Klaude display gets a
 message, 400 characters and 20 lines. VRChat rate-limits the chatbox: live typing updates it at most every 1.5 s, the
 final message is sent at once.
+
+Translation: `GET /api/v1/translate` (settings + every language with its download state), `PUT /api/v1/translate`,
+`POST /api/v1/translate/models/{code}` (download, progress in `GET /api/v1/translate`), `DELETE …/models/{code}`,
+`POST /api/v1/translate/try {"text"}` (translate without sending). Pictures: `POST /api/v1/kd/image?screen=main|left|right`.
 
 ## Troubleshooting
 

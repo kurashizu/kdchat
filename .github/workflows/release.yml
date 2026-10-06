@@ -54,6 +54,20 @@ jobs:
             if ($s.frames_sent -lt 1) { throw "the Klaude display sent nothing" }
             Invoke-WebRequest http://127.0.0.1:5599/ -UseBasicParsing | Out-Null
             Invoke-WebRequest "http://127.0.0.1:5599/api/v1/network/qr.svg?url=http://x/" -UseBasicParsing | Out-Null
+            # translation in the frozen app: download a language from the models release, translate one sentence
+            Invoke-RestMethod -Method Post http://127.0.0.1:5599/api/v1/translate/models/de | Out-Null
+            $ready = $false
+            for ($i = 0; $i -lt 180 -and -not $ready; $i++) {
+              Start-Sleep -Seconds 2
+              $l = (Invoke-RestMethod http://127.0.0.1:5599/api/v1/translate).languages | Where-Object { $_.code -eq "de" }
+              if ($l.state -eq "error") { throw "model download failed: $($l.error)" }
+              $ready = $l.state -eq "ready"
+            }
+            if (-not $ready) { throw "the model download did not finish" }
+            Invoke-RestMethod -Method Put -ContentType application/json -Body '{"enabled":true,"targets":["de"],"source":"en"}' http://127.0.0.1:5599/api/v1/translate | Out-Null
+            $t = Invoke-RestMethod -Method Post -ContentType application/json -Body '{"text":"Good morning, how are you?"}' http://127.0.0.1:5599/api/v1/translate/try
+            if (-not $t.translations.de) { throw "no translation" }
+            Write-Host "translation: $($t.translations.de)"
           } finally { Stop-Process -Id $p.Id -Force }
       - name: Name it
         id: name

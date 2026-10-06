@@ -71,7 +71,7 @@ class Link:
         self.reg_pages = range(c.reg_base // c.P, c.reg_base // c.P + c.reg_npages)
         self.spr_head = c.spr_base // c.P                                                     # sprite registers + colours
         self.spr_pages = range(c.spr_base // c.P, (c.spr_end + c.P - 1) // c.P)
-        # shapes: small state, sent with the core pages (the hole = the clear command's page id is never memory)
+        # shapes: small state, sent with the core pages
         self.shp_pages = range(c.shp_base // c.P, c.pages) if c.shp_n else range(0)
         first = list(self.pal_pages) + list(self.reg_pages) + [self.spr_head] + list(self.shp_pages)
         tc_pages = list(range(c.tc_base // c.P, (c.tc_base + c.tc_bytes + c.P - 1) // c.P))   # tile colours before the
@@ -181,7 +181,7 @@ class Link:
                 return None
             p = min(pend, key=lambda p: self.pos[p] - AGE_STEP * (self._ticks - self.waiting.get(p, self._ticks)))
             return self._send_page(p)
-        if self.last and self.last[0] > self.cfg.id_clear_gfx:
+        if self.last and self.last[0] > self.cfg.pages:
             return self._emit(0, bytes(self.cfg.P))          # never leave a command on the wire (a late joiner would act)
         return None
 

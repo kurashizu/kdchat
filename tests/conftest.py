@@ -66,7 +66,9 @@ def make_client(tmp_path, monkeypatch):
         appmod._cb.last = 0.0                     # (the chatbox rate limit: a fresh start)
         monkeypatch.setattr(appmod, "_cb_typing", False)
         monkeypatch.setattr(appmod, "_typing_state", False)
+        monkeypatch.setattr(appmod, "_tr_settings", dict(appmod._TR_DEFAULTS))
         c = TestClient(appmod.app, **kw)
+        c.app_module = appmod
         c.__enter__()
         clients.append(c)
         return c

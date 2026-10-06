@@ -82,6 +82,7 @@
           <button type="button" class="btn sm" id="chime"><span aria-hidden="true">🔔</span><span data-i18n="kd.chime"></span></button>
           <label class="btn sm" data-i18n-title="kd.imageTitle"><span aria-hidden="true">🖼</span><span data-i18n="kd.image"></span>
             <input type="file" id="file" accept="image/*" hidden></label>
+          <div class="seg mini" id="imgScreen" hidden></div>
           <button type="button" class="btn sm" id="closeImg" hidden><span aria-hidden="true">✕</span><span data-i18n="kd.closeImg"></span></button>
           <button type="button" class="btn sm ghost" id="kdClear" data-i18n-title="kd.clearTitle"><span data-i18n="kd.clear"></span></button>
         </div>
@@ -155,6 +156,16 @@
             <div class="lan-list" id="lanList"></div>
           </div>
           <p class="hint" data-i18n="lan.hint"></p>
+        </section>
+        <section class="sec" id="trSec">
+          <h3 data-i18n="tr.title"></h3>
+          <p class="hint" data-i18n="tr.hint"></p>
+          <button type="button" class="switch-row" id="trOn" role="switch" aria-checked="false">
+            <span class="txt"><b data-i18n="tr.enable"></b></span><i class="sw" aria-hidden="true"></i></button>
+          <div id="trBox"></div>
+          <h4 class="sub" data-i18n="tr.models"></h4>
+          <p class="hint" data-i18n="tr.modelsHint"></p>
+          <div class="tr-models" id="trModels"></div>
         </section>
         <section class="sec" id="kdSec">
           <h3 data-i18n="sec.kd"></h3>

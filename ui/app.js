@@ -39,6 +39,7 @@ function setLang(l, remember) {
   });
   paintPlaceholder(); paintOutputs(); paintTargets(); paintStatus(); paintConn();
   if (S.kd) renderSettings();
+  if (typeof TR !== "undefined" && TR && TR.data) paintTr();
   if (S.kdStat) paintKdStat();
   if (S.cfg) paintSettings();
   refreshHistory();
@@ -303,6 +304,7 @@ $("tLive").addEventListener("pointerdown", (e) => { if (document.activeElement =
 // ---------------------------------------------------------------- settings sheet
 function openSheet(focusId) {
   loadSettings();
+  loadTr();
   $("sheet").hidden = false;
   requestAnimationFrame(() => $("sheet").classList.add("open"));
   document.body.classList.add("sheet-open");
@@ -386,10 +388,11 @@ $("clearHist").onclick = async () => {
 // ---------------------------------------------------------------- Klaude display: settings
 const SEGS = [     // [key, label key, option-key prefix, only in layout]
   ["screen", "set.screen", "screen"], ["layout", "set.layout", "layout"], ["scale", "set.scale", "scale"],
+  ["wings", "set.wings", "wings"],
   ["long", "set.long", "long", "single"], ["speed", "set.speed", "speed", "single"],
 ];
 const SEG_DEFAULTS = { screen: ["208x80", "176x96", "160x112", "128x128", "112x144", "96x176"], layout: ["chat", "single"],
-                       scale: [1, 2], long: ["left", "up", "cut"], speed: ["slow", "normal", "fast"] };
+                       scale: [1, 2], long: ["left", "up", "cut"], speed: ["slow", "normal", "fast"], wings: ["auto", "on", "off"] };
 const CHIPS = ["clock", "date", "show_time", "divider", "highlight", "invert", "image_full"];
 const COLORS = ["color", "alt", "accent", "meta"];
 const IMG_SEGS = [["image_fit", "img.fit", [["cover", "img.cover"], ["contain", "img.contain"]]],
@@ -500,6 +503,8 @@ function paintKdStat() {
   if (!s.synced) parts.push(t("kd.pending", { p: s.pending_pages, s: Math.ceil(s.eta_s) }));
   parts.push(`${s.width}×${s.height}`, t("kd.msgs", { n: s.messages }));
   if (s.image) parts.push(t("kd.showingImage"));
+  if (s.wings) parts.push(t("kd.wingsOpen"));
+  if ((s.images || []).length > 1) parts.push(t("kd.lowres"));
   st.appendChild(document.createTextNode(" · " + parts.join(" · ")));
 }
 
@@ -509,15 +514,18 @@ async function refreshKd(force) {
     const s = await api("/kd/status");
     S.kdStat = s;
     if (!S.palette.length && s.palette) { S.palette = s.palette; if (S.kd) renderSettings(); }
-    if (s.width && (!S.dims || S.dims[0] !== s.width || S.dims[1] !== s.height)) {
-      S.dims = [s.width, s.height];
-      const k = Math.min(352 / s.width, 240 / s.height);
-      $("prev").style.width = Math.round(s.width * k) + "px"; $("prev").style.height = Math.round(s.height * k) + "px";
-      $("prev").style.aspectRatio = `${s.width} / ${s.height}`;
+    const pw = s.wings ? 3 * s.width + 12 : s.width;              // open side screens: the preview shows all three
+    if (s.width && (!S.dims || S.dims[0] !== pw || S.dims[1] !== s.height)) {
+      S.dims = [pw, s.height];
+      const k = Math.min((s.wings ? 1056 : 352) / pw, 240 / s.height);
+      $("prev").style.width = Math.round(pw * k) + "px"; $("prev").style.height = Math.round(s.height * k) + "px";
+      $("prev").style.aspectRatio = `${pw} / ${s.height}`;
+      $("prev").closest(".device").classList.toggle("wide", !!s.wings);
     }
+    paintImgScreen();
     $("led").className = s.synced ? "ok" : "";
     paintKdStat();
-    $("closeImg").hidden = !s.image;
+    $("closeImg").hidden = !(s.images || []).length && !s.image;
     if (s.image !== S.image) {                                     // a picture appeared / closed
       S.image = s.image;
       if (!S.toManual || !s.image) { S.to.kd = !s.image; S.toManual = false; paintTargets(); }
@@ -535,9 +543,22 @@ async function sendImage(file) {
   if (!file || !file.type.startsWith("image/")) return;
   if (!S.out.kd) { toast(t("kd.needKd"), "err"); return; }
   toast(t("kd.imgWorking"));
-  try { const r = await api("/kd/image", "POST", undefined, file); toast(t("kd.imgShown", { s: Math.round(r.eta_s) })); refreshKd(true); }
+  const scr = S.imgScreen || "main";
+  try { const r = await api("/kd/image?screen=" + scr, "POST", undefined, file); toast(t("kd.imgShown", { s: Math.round(r.eta_s) })); refreshKd(true); }
   catch (e) { toast(t("kd.imgFailed", { msg: e.message }), "err"); }
 }
+// where the next picture goes (main screen or a side screen; side screens: up to 3 pictures, low resolution)
+function paintImgScreen() {
+  const box = $("imgScreen");
+  const can = S.kd && S.kd.settings && S.kd.settings.wings !== "off";
+  box.hidden = !can;
+  if (!can) { S.imgScreen = "main"; return; }
+  box.innerHTML = "";
+  box.appendChild(el("span", "lab", t("img.to")));
+  box.appendChild(segOf(["main", "left", "right"].map((v) => [v, t("scr." + v)]), S.imgScreen || "main",
+                        (v) => { S.imgScreen = v; paintImgScreen(); }));
+}
+
 $("file").onchange = (e) => { sendImage(e.target.files[0]); e.target.value = ""; };
 document.addEventListener("paste", (e) => {
   const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === "file" && i.type.startsWith("image/"));
@@ -737,3 +758,81 @@ matchMedia("(max-width: 720px)").addEventListener("change", () => { paintPlaceho
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshKd(true); refreshHistory(); health(); } });
   if (!phone()) text.focus();      // (phones: no keyboard popping up on load)
 })();
+
+
+// ---------------------------------------------------------------- translation (local models, translate.py)
+var TR = { data: null, poll: null };      // (var: setLang may run before this line)
+
+async function loadTr() {
+  try { TR.data = await api("/translate"); paintTr(); }
+  catch (e) { $("trBox").textContent = t("tr.failed", { msg: e.message }); }
+  const busy = TR.data && TR.data.languages.some((l) => l.state === "downloading");
+  clearTimeout(TR.poll);
+  if (busy) TR.poll = setTimeout(loadTr, 1000);
+}
+
+async function setTr(part) {
+  try { TR.data.settings = (await api("/translate", "PUT", part)).settings; paintTr(); refreshKd(true); }
+  catch (e) { toast(t("tr.failed", { msg: e.message }), "err"); loadTr(); }
+}
+
+function langLabel(l) { return l.native === l.name ? l.native : `${l.native} · ${l.name}`; }
+
+function selectOf(options, cur, onPick) {          // options: [[value, label]]
+  const sel = el("select");
+  for (const [v, n] of options) { const o = el("option", null, n); o.value = v; if (String(v) === String(cur)) o.selected = true; sel.appendChild(o); }
+  sel.onchange = () => onPick(sel.value);
+  return sel;
+}
+
+function paintTr() {
+  const d = TR.data;
+  if (!d) return;
+  const s = d.settings, langs = d.languages;
+  const ready = langs.filter((l) => l.state === "ready");
+  const sw = $("trOn"); sw.setAttribute("aria-checked", !!s.enabled);
+  sw.onclick = () => setTr({ enabled: !s.enabled });
+  const box = $("trBox"); box.innerHTML = "";
+  const all = langs.map((l) => [l.code, langLabel(l)]);
+  const pickTarget = (i) => (v) => {
+    const tg = [...s.targets]; tg[i] = v; const out = tg.filter((x, k) => x && x !== "-" && tg.indexOf(x) === k);
+    const l = langs.find((x) => x.code === v);
+    if (l && l.state !== "ready") toast(t("tr.needModel", { name: l.native }), "err");
+    setTr({ targets: out });
+  };
+  box.appendChild(optRow(t("tr.source"), selectOf([["auto", t("tr.auto")], ...all], s.source, (v) => setTr({ source: v }))));
+  if (s.source === "auto")
+    box.appendChild(optRow(t("tr.latin"), selectOf(all.filter(([c]) => !["zh", "zh_hant", "ja", "ko", "ru", "uk", "bg", "ar", "fa", "ur", "he", "th", "el", "hi", "mr", "bn", "ta", "te", "kn", "ml", "gu", "sr"].includes(c)), s.latin, (v) => setTr({ latin: v }))));
+  box.appendChild(optRow(t("tr.target1"), selectOf([["-", t("tr.none")], ...all], s.targets[0] || "-", pickTarget(0))));
+  box.appendChild(optRow(t("tr.target2"), selectOf([["-", t("tr.none")], ...all], s.targets[1] || "-", pickTarget(1))));
+  box.appendChild(optRow(t("tr.chatbox"), segOf([[0, t("tr.cb0")], [1, t("tr.cb1")], [2, t("tr.cb2")]], s.chatbox, (v) => setTr({ chatbox: Number(v) }))));
+  const kd = el("button", "pill" + (s.kd ? " on" : "")); kd.type = "button"; kd.setAttribute("aria-pressed", !!s.kd);
+  kd.appendChild(el("i", "dot")); kd.appendChild(el("span", null, t("tr.kd"))); kd.onclick = () => setTr({ kd: !s.kd });
+  box.appendChild(optRow("", kd));
+  // the language list: the selected / downloaded ones first
+  const m = $("trModels"); m.innerHTML = "";
+  const want = new Set([s.source, s.latin, ...s.targets]);
+  const order = [...langs].filter((l) => l.code !== "en").sort((a, b) =>
+    (b.state === "ready") - (a.state === "ready") || want.has(b.code) - want.has(a.code) || a.name.localeCompare(b.name));
+  for (const l of order) {
+    const row = el("div", "tr-row" + (l.state === "ready" ? " ready" : ""));
+    row.appendChild(el("span", "lab", langLabel(l)));
+    const mb = Math.round((l.size || 0) / 1e6);
+    if (l.state === "downloading") {
+      const pct = l.total ? Math.floor(100 * l.done / l.total) : 0;
+      const bar = el("span", "bar"); const fill = el("i"); fill.style.width = pct + "%"; bar.appendChild(fill);
+      row.appendChild(bar); row.appendChild(el("em", null, pct + "%"));
+    } else if (l.state === "ready") {
+      row.appendChild(el("em", "ok", t("tr.ready")));
+      const del = el("button", "btn sm ghost", t("tr.delete")); del.type = "button";
+      del.onclick = async () => { try { await api("/translate/models/" + l.code, "DELETE"); loadTr(); } catch (e) { toast(t("toast.failed", { msg: e.message }), "err"); } };
+      row.appendChild(del);
+    } else {
+      row.appendChild(el("em", l.state === "error" ? "err" : null, l.state === "error" ? (l.error || "error") : mb + " MB"));
+      const dl = el("button", "btn sm", t(l.state === "error" ? "tr.retry" : "tr.download")); dl.type = "button";
+      dl.onclick = async () => { try { await api("/translate/models/" + l.code, "POST"); loadTr(); } catch (e) { toast(t("toast.failed", { msg: e.message }), "err"); } };
+      row.appendChild(dl);
+    }
+    m.appendChild(row);
+  }
+}

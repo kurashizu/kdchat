@@ -118,7 +118,7 @@ least error and maps the other pixels to the nearest of them. Shapes and sprites
 
 ### Memory, pages and sending
 
-- The memory is 6,280 bytes in 210 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
+- The memory is 6,250 bytes in 209 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
   bytes (`KD_B0..KD_B29`), 248 bits of synced parameters. Default rate 3 frames per second.
 - `present()` only encodes. Frames go out from `tick()` or `run()`.
 - Only changed pages are sent. A full screen takes a few dozen frames; changing one line of text usually 1 or 2.
@@ -165,12 +165,16 @@ Useful attributes: `d.cfg` (layout; `W`, `H`, `GW`, `GH`, `rate_hz` can be chang
 
 ```python
 id = d.text(s, x=0, y=0, width=None, align="left", scale=1, color=1, bg=0, box=False,
-            invert=False, wrap=True, line_h=None, id=None, clip=True, move=False, page=False, pages=None)
+            invert=False, wrap=True, line_h=None, id=None, clip=True, move=False, page=False, pages=None,
+            screen="main")
 ```
+
+`screen="left"` / `"right"` puts the text on a side screen (see [Side screens](#side-screens-wings)); `compose()`
+takes `screen=` too.
 
 | Argument | Meaning |
 |---|---|
-| `s` | the text, may contain `\n`. ASCII, all GB2312 hanzi, Japanese kana; characters not in the font show as □ |
+| `s` | the text, may contain `\n`. ASCII, all GB2312 hanzi, Japanese (JIS X 0208: kana and both kanji levels), traditional Chinese (Big5 level 1); characters not in the font show as □ |
 | `x`, `y` | top-left corner in screen pixels, any position (off-screen too with `clip=False`, e.g. long marquee lines) |
 | `width` | layout width, default up to the right edge; longer lines wrap (`wrap=True`) |
 | `align` | `left` / `center` / `right` within `width` |
@@ -258,7 +262,7 @@ not apply. Shapes are kept by number: calling again with the same `i` changes th
 
 ```python
 d.sprite(i, x=None, y=None, pattern=None, colors=None, visible=None,
-         flip_x=None, flip_y=None, double=None, above_text=None)
+         flip_x=None, flip_y=None, double=None, above_text=None, screen=None)
 ```
 
 - `i`: 0..3. Arguments left at `None` keep their value.
@@ -290,6 +294,43 @@ d.sprite(i, x=None, y=None, pattern=None, colors=None, visible=None,
 | `text_wrap` | `(w, h)` or `None` | state | wrap period of moving text (w in 8 px, h in 2 px steps, max 2040 / 510); `None` = screen size |
 | `text_clip` | `(y0, y1)` or `None` | state | moving text only shows in these rows (pixel-exact); `y0 == y1` hides it |
 | `size_m` | 0.20 .. 0.60 | state | width of the screen in metres (for a 128 px wide screen) |
+| `wings` | bool | state | unfold the two side screens (see below) |
+| `wing_pages` | `(left, right)` | state | text pages of the side screens' regions (default from `config.json`, 4 + 4) |
+
+### Side screens (wings)
+
+Two more screens of the main screen's size, folded behind it like a satellite's solar arrays. `d.set(wings=True)`
+unfolds them (about 1.4 s: the inner panel swings out around its hinge, the outer one unfolds, then the screens power
+on); `wings=False` folds them. At the left / right positions the avatar moves the display outward while they open, so
+they never reach into it. They have no title bar and no status bar.
+
+Everything that can go on the main screen can go on a side screen, in the side screen's own coordinates (0..W,
+0..H, the same size as the main screen):
+
+```python
+d.set(wings=True)
+d.text("今日はいい天気ですね", 4, 4, width=168, screen="left")
+d.shapes.rect(3, 4, 70, 168, 20, color=3, fill=13, screen="right")
+d.sprite(2, x=10, y=10, pattern=pat, screen="right")
+d.set_size(0, lowres=True)                       # pictures on side screens need the low resolution
+d.wing_picture("left", rows)                     # rows of palette indices, cfg.GW x cfg.GH
+d.present()
+```
+
+**No extra memory: the content is routed.** Registers in the same page as `show` (a late joiner gets them together
+with the device, and they only change when the split changes) say which part of the memory belongs to which screen:
+
+- **Text:** the side screens' text sits in regions at the END of the text area (`wing_pages` pages each, default 4 + 4),
+  the main screen's text before them. The main screen has that much less text memory while a side screen has text.
+  Side-screen text never moves (`move=True` is not allowed there).
+- **Shapes:** the driver stores the main screen's shapes first, then the left's, then the right's (it renumbers the
+  slots in memory; you keep using your own slot numbers).
+- **Sprites:** 2 bits per sprite.
+- **Pictures:** a side screen's picture uses its own range of graphics tiles (`config.json` wings.tiles), so pictures
+  on side screens need the low-resolution mode (2×2 px dots): up to three pictures, all low resolution, sharing the
+  16-colour palette. Photo mode and the graphics registers (scrolling, zoom, window, mirror) are the main screen's.
+
+Transitions, scrolling and the status bar belong to the main screen.
 
 ### Appearing, leaving and the chime
 
@@ -338,7 +379,7 @@ d.transition(effect="fade", show=True, duration=0.5)
 
 | What | Limit | Beyond it |
 |---|---|---|
-| Text memory | 630 bytes (100 hanzi on a full screen take about 190) | from the first text that does not fit on, nothing shows; counted in `dropped` |
+| Text memory | 630 bytes for all screens (100 hanzi on a full screen take about 190); side screens take `wing_pages` × 30 bytes each from it | from the first text that does not fit on, nothing shows; counted in `dropped` |
 | Text runs | 64 (a line break or a latin / CJK switch starts a new run) | as above |
 | Characters on screen | 360 | as above |
 | One run | 31 characters (split automatically) | - |
@@ -494,8 +535,8 @@ d.present()
 | `KD_P` | int 0..255 | page id; the page's bytes are `KD_B0..KD_B29` of the same frame |
 | `KD_B0` .. `KD_B29` | int 0..255 | the 30 bytes of the page |
 
-Page ids: 0..209 = memory pages, except 204 = clear graphics (a command; that page holds no memory); 255 = chime;
-210..254 are free (new commands are allocated downwards from 254). While `KD_P` holds a page id, the avatar's animator
+Page ids: 0 = idle, 1..209 = memory pages; 254 = clear graphics and 255 = chime (commands, allocated downwards from
+255, so the memory can grow upwards); 210..253 are free. While `KD_P` holds a page id, the avatar's animator
 writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id changes. A frame must stay for at least
 2 of the viewer's animator frames, which 3 Hz easily is.
 
@@ -507,9 +548,12 @@ writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id ch
 | `tilecol` | 4480 | 560 | the 4 palette indices of every 8×8 tile |
 | `palette` | 5040 | 32 | 16 colours, RGB565 |
 | `text` | 5100 | 630 | the run chain (headers + 13-bit glyph codes) |
-| `regs` | 5730 | 41 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show`, `size`, shape offsets |
+| `regs` | 5730 | 47 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show` (bit 0 shown, bit 1 side screens open), `size`, shape offsets, side-screen routes `wing_tl` / `wing_tr` (first text page of each region), `wing_gl` / `wing_gr` (first tile of each picture), `wing_shp` (first shape slot left << 4 \| right), `wing_spr` (2 bits per sprite) |
 | `sprites` | 5790 | 276 | 4 sprites: registers, colours, 16×16 2-bit patterns |
-| `shapes` | 6120 | 160 | 16 shapes × 10 bytes |
+| `shapes` | 6090 | 160 | 16 shapes × 10 bytes |
+
+Glyph codes: ASCII 7 bits, the common page (kana + 3,755 hanzi) 12 bits, everything else 14 bits; a stretch that mixes
+common and extended full-width glyphs is written in the extended mode alone when that is shorter (Japanese).
 
 **Checksums.** The memory is held as 16-bit words split over several renderers. For each renderer the client sends
 `sum((2 * i + 1) * word_i) mod 65536` over that renderer's words (`i` = the word's index in the renderer, the checksum

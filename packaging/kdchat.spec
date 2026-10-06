@@ -4,7 +4,7 @@
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 sys.path.insert(0, ROOT)
@@ -26,12 +26,20 @@ def tree(src, dest):
 
 # ui/ (the console) and kd_display/ (the Klaude display library: kd/*.py is imported from this folder at run time
 # by kd_chat.py, plus config.json, the font atlas and its OFL licence)
-datas = tree("ui", "ui") + tree("kd_display", "kd_display")
+datas = tree("ui", "ui") + tree("kd_display", "kd_display") + tree("vendor", "vendor")      # vendor: the translation engine
+# mini-racer: the V8 library + its ICU data (runs the translation engine's WebAssembly)
+datas += collect_data_files("py_mini_racer")
+binaries = collect_dynamic_libs("py_mini_racer")
 datas += [(os.path.join(ROOT, f), ".") for f in ("LICENSE", "THIRD_PARTY_NOTICES.md") if os.path.exists(os.path.join(ROOT, f))]
 
+# uvicorn: only the parts this app runs (h11 HTTP, asyncio loop, lifespan; no websockets / httptools / uvloop)
+UVICORN = ["uvicorn.logging", "uvicorn.loops", "uvicorn.loops.auto", "uvicorn.loops.asyncio", "uvicorn.protocols",
+           "uvicorn.protocols.http", "uvicorn.protocols.http.auto", "uvicorn.protocols.http.h11_impl",
+           "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto", "uvicorn.lifespan", "uvicorn.lifespan.on",
+           "uvicorn.lifespan.off", "uvicorn.middleware", "uvicorn.middleware.proxy_headers"]
 hiddenimports = (
-    collect_submodules("uvicorn")
-    + ["kd_chat", "netinfo", "kdchat_config", "version", "segno", "psutil"]
+    UVICORN
+    + ["kd_chat", "netinfo", "kdchat_config", "version", "segno", "psutil", "translate", "py_mini_racer"]
     # what kd_display/kd/*.py imports (it is not analysed: it is loaded from the data folder)
     + ["http.server", "copy", "random", "zlib", "struct", "base64", "math", "PIL.Image", "PIL.ImageOps",
        "PIL.ImageEnhance", "PIL.ImageFilter", "PIL.ImageDraw", "PIL.PngImagePlugin", "PIL.JpegImagePlugin",
@@ -63,7 +71,13 @@ a = Analysis(
     pathex=[ROOT],
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["uvloop", "watchfiles", "pytest", "httpx"],
+    binaries=binaries,
+    # not used: test / dev tools, other web servers' extras, standard-library parts the app never imports, Pillow's
+    # GUI bindings and formats we do not read
+    excludes=["uvloop", "watchfiles", "pytest", "httpx", "websockets", "httptools", "yaml", "dotenv",
+              "unittest", "pydoc", "doctest", "lib2to3", "pdb", "test", "distutils", "setuptools", "pip",
+              "PIL.ImageQt", "PIL.ImageTk", "PIL._avif", "PIL.FpxImagePlugin", "PIL.MicImagePlugin",
+              "numpy", "IPython", "matplotlib"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

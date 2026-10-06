@@ -20,6 +20,9 @@ project pages.
 | typing-extensions | PSF-2.0 | (dependency) |
 | annotated-types, annotated-doc, typing-inspection | MIT | (dependencies) |
 | [python-osc](https://github.com/attwad/python-osc) | Unlicense (public domain) | OSC messages |
+| [Bergamot translator](https://github.com/mozilla/translations) (WebAssembly build shipped with Firefox, `vendor/bergamot/`, unchanged; source: [mozilla/translations `inference/`](https://github.com/mozilla/translations/tree/main/inference), version in `bergamot-translator.js`) | MPL-2.0 (`vendor/bergamot/LICENSE`) | translation engine |
+| [Firefox Translations models](https://github.com/mozilla/translations) (not bundled: downloaded on request from the kdchat release `models-2026.10`, mirrored unchanged with their manifest) | MPL-2.0 | translation models |
+| [mini-racer](https://github.com/bpcreech/PyMiniRacer) (with [V8](https://v8.dev/), BSD-3-Clause, and ICU data, Unicode license) | ISC | runs the translation engine (WebAssembly) inside kdchat |
 | [Pillow](https://github.com/python-pillow/Pillow) | MIT-CMU (HPND) | pictures for the Klaude display, icon |
 | [psutil](https://github.com/giampaolo/psutil) | BSD-3-Clause | finding the LAN address |
 | [segno](https://github.com/heuer/segno) | BSD-3-Clause | QR codes (generated locally) |

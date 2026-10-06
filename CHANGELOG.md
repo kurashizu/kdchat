@@ -3,6 +3,34 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-10-07
+
+Translation, and the Klaude display's two side screens. **Needs the Klaude avatar of 2026-10-07 or later** (older
+avatars and kdchat versions do not match: the display's command ids and memory layout changed).
+
+### Added
+- **Translation of your messages, on your computer.** Pick up to two languages; every message you send is translated
+  locally (Mozilla's Firefox Translations models on the CPU, about 0.1 s per message, nothing goes online). The game
+  chatbox gets the original and as many translations as fit (Settings → Translation: 0, 1 or 2); the Klaude display
+  shows them on its side screens. The language you type is detected (or set it). 54 languages; each is downloaded
+  on request (about 85 MB, from this repository's release `models-2026.10`, checked with SHA-256) and stays on your
+  computer. English needs no download.
+- **Side screens on the Klaude display.** Two screens the size of the main one unfold from behind it like a
+  satellite's solar panels. Display setting "Side screens": auto (open while they show something), open, off. At the
+  left / right positions the display moves outward while they open, never into the avatar.
+- **Up to three pictures at once**: Image → "Show on" main / left / right. With pictures on side screens all of them
+  use the low resolution (they share the graphics memory) and one palette picked from all of them.
+- The display font covers Japanese (JIS X 0208: kana, both kanji levels, ー) and traditional Chinese (Big5 level 1).
+- Driver (`kd_display`, docs/KD_DRIVER.md): `d.set(wings=True)`, `screen="left" / "right"` for text, shapes and
+  sprites, `d.wing_picture(side, pixels)`, `d.set(wing_pages=(l, r))`.
+- API: `GET/PUT /api/v1/translate`, `POST/DELETE /api/v1/translate/models/{code}`, `POST /api/v1/translate/try`;
+  `POST /api/v1/kd/image?screen=`, `DELETE /api/v1/kd/image?screen=`; messages carry `source_lang` and `translations`.
+
+### Changed
+- Display command frames are allocated from 255 down (clear graphics 254, chime 255); the memory has no hole page
+  any more (209 pages) and can grow later.
+- Mixed kana / kanji text is encoded with fewer run headers (longer Japanese fits).
+
 ## [1.3.0] - 2026-10-06
 
 ### Changed

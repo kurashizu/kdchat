@@ -58,6 +58,8 @@ DEFAULTS = {
     "image_screen": "auto",  # pictures: auto = the screen size closest to the picture's shape | keep = the message size
     "image_res": "high",     # pictures: high = full resolution (~70 s to arrive) | low = 2x2 px dots (~20 s)
     "size": 0.40,            # the device's width in metres (a 128 px wide screen), 0.20 .. 0.60 (register size)
+    "wings": "auto",         # the side screens: auto = unfold while they have something to show (translations, pictures),
+                             # on = always unfolded, off = never
 }
 SCREENS = tuple(f"{w}x{h}" for w, h in _SIZES)      # from kd_display/config.json screen.sizes
 CHOICES = {
@@ -69,7 +71,10 @@ CHOICES = {
     "image_fit": ("cover", "contain"),
     "image_screen": ("auto", "keep"),
     "image_res": ("high", "low"),
+    "wings": ("auto", "on", "off"),
 }
+WING_PAGES = 4                # text pages of each side screen's region (the main log has that much less)
+SIDES = {"left": 1, "right": 2}
 COLOR_KEYS = ("color", "accent", "meta", "alt")
 HDR = 10                     # header height: one 3x5 line (time zone + time | date), 2 px space, a 2 px rule
 DIVIDER = 3                  # the dividers between messages: dark grey (subtle)
@@ -285,6 +290,11 @@ class KdChat:
         self.active = False
         self.log = log
         self.image = None                    # (graphics rows of palette indices, palette) while a picture is shown
+        self.img_src = {}                    # screen (0 main, 1 left, 2 right) -> picture bytes (re-prepared per size)
+        self.wing_img = {}                   # side (1, 2) -> graphics rows of palette indices (low resolution)
+        self.img_pal = None                  # the palette every picture shares
+        self.wing_text = {}                  # side -> (text, tag): the newest message's translations
+        self.wing_text_on = False            # translations go to the side screens (set by the app)
         self._next_id = 1
         self._minute = None
         self._stop = False
@@ -329,7 +339,17 @@ class KdChat:
     @property
     def K(self):
         """line slots: visible lines + a partial one + the next one"""
-        return 14 if self.slot_pages == 1 else SLOT_MEM // 2      # (14: the text's 64-run limit; fills 96x176)
+        mem = SLOT_MEM - (2 * WING_PAGES if self.wings_reserved() else 0)
+        return min(14, mem) if self.slot_pages == 1 else mem // 2      # (14: the text's 64-run limit; fills 96x176)
+
+    def wings_reserved(self):
+        """do the side screens get their text regions (the log has 2 x WING_PAGES pages less)?"""
+        return self.s["wings"] == "on" or (self.s["wings"] == "auto" and (self.wing_text_on or bool(self.wing_img)))
+
+    def wings_open(self):
+        if self.s["wings"] == "off" or not self.active:
+            return False
+        return self.s["wings"] == "on" or bool(self.wing_img) or any(t for t, _ in self.wing_text.values())
 
     @property
     def lh(self):
@@ -400,8 +420,13 @@ class KdChat:
             self.s = clean_settings(new, self.s)
             if old["screen"] != self.s["screen"]:
                 self._apply_screen()
-            if any(old[k] != self.s[k] for k in ("scale", "show_time", "divider", "layout", "screen", "clock", "date")):
+            if any(old[k] != self.s[k] for k in ("scale", "show_time", "divider", "layout", "screen", "clock", "date", "wings")):
                 self._relayout()
+            pics = bool(self.img_src) and any(old[k] != self.s[k] for k in
+                                              ("screen", "image_res", "image_fit", "image_full", "image_screen", "clock", "date"))
+        if pics:
+            self._prepare_images()                             # (outside the lock: slow)
+        with self.lock:
             self._full = True
             if self.active:
                 self._step()
@@ -434,10 +459,7 @@ class KdChat:
                 if len(self.msgs) > 50:
                     self.msgs = self.msgs[-50:]
             if self.image is not None:
-                self.image = None
-                self._apply_screen()
-                self._relayout()
-                self._full = True
+                self._drop_main_picture()
             self._relayout(last_only=True)
             if new and sfx and self.active:
                 self.d.chime()
@@ -456,9 +478,7 @@ class KdChat:
             if len(self.msgs) > 50:
                 self.msgs = self.msgs[-50:]
             if self.image is not None:
-                self.image = None
-                self._apply_screen()
-                self._full = True
+                self._drop_main_picture()
             self._relayout(last_only=not self._full)
             if final and sfx and self.active:
                 self.d.chime()
@@ -541,44 +561,175 @@ class KdChat:
     def clear(self):
         with self.lock:
             self.msgs, self.draft, self.typing = [], None, False
-            self.image = None
+            self.image, self.img_src, self.wing_img, self.img_pal, self.wing_text = None, {}, {}, None, {}
             self._apply_screen()
             self._relayout()
             self._full = True
             if self.active:
                 self._step()
 
-    def show_image(self, data: bytes) -> dict:
-        """show a picture below the header (until the next message or close_image)"""
-        c = self.d.cfg
+    def show_image(self, data: bytes, screen: str = "main") -> dict:
+        """show a picture: on the main screen below the header (until the next message or close_image), or on a side
+        screen ("left" / "right"). Pictures on side screens share the graphics memory: then every picture uses the
+        low-resolution mode (2x2 px dots) and all of them one palette."""
+        sid = 0 if screen == "main" else SIDES[screen]
         with self.lock:
-            top = 0 if self.s["image_full"] or not (self.s["clock"] or self.s["date"]) else HDR   # screen px above it
-            fit = self.s["image_fit"]
-            keep = {0, TYPING_COLOR} | {self.s[k] for k in COLOR_KEYS}
-            low = self.s["image_res"] == "low"            # low: 2x2 px dots, a quarter of the pages
-            size = best_size(data, top) if self.s["image_screen"] == "auto" else c.size   # closest to the picture's shape
-            self.d.set_size(size, lowres=low)
-            gw, gh, top_g = c.GW, c.GH, top // c.gscale
-        img = prepare_image(data, gw, gh, top_g, fit)                # slow part outside the lock
-        pal = adaptive_palette(img, self.base_palette, keep)
-        idx = quantize(img, pal, per_tile=c.colors_per_tile)     # 4 colours per 8x8 block
+            self.img_src[sid] = data
+        self._prepare_images()
         with self.lock:
-            self.image = (idx, pal)
             self._full = True
             if self.active:
                 self._step()
             n = len(self.d.link.pending())
-            return {"pages": n, "eta_s": round(n / c.rate_hz, 1)}
+            return {"pages": n, "eta_s": round(n / self.d.cfg.rate_hz, 1), "lowres": bool(self.wing_img),
+                    "screens": sorted({0: "main", 1: "left", 2: "right"}[k] for k in self.img_src)}
 
-    def close_image(self):
+    def _prepare_images(self):
+        """(re)build every picture for the current size / resolution, with one shared palette"""
+        c = self.d.cfg
         with self.lock:
-            if self.image is not None:
-                self.image = None
+            src = dict(self.img_src)
+            wings = any(k for k in src)
+            top = 0 if self.s["image_full"] or not (self.s["clock"] or self.s["date"]) else HDR
+            low = wings or self.s["image_res"] == "low"
+            if 0 in src and self.s["image_screen"] == "auto":
+                size = best_size(src[0], top)
+            else:
+                w, h = (int(v) for v in self.s["screen"].split("x"))
+                size = [tuple(v) for v in c.sizes].index((w, h)) if (w, h) in [tuple(v) for v in c.sizes] else c.size
+            if not src:
+                self.image, self.wing_img, self.img_pal = None, {}, None
+                self._apply_screen()
+                self._relayout()
+                return
+            self.d.set_size(size, lowres=low)
+            gw, gh, gs = c.GW, c.GH, c.gscale
+            keep = {0, TYPING_COLOR} | {self.s[k] for k in COLOR_KEYS}
+            fit = self.s["image_fit"]
+        imgs = {k: prepare_image(v, gw, gh, (top // gs) if k == 0 else 0, fit) for k, v in src.items()}   # slow: unlocked
+        if len(imgs) == 1:
+            joint = next(iter(imgs.values()))
+        else:                                                     # one palette for all: picked from all of them
+            from PIL import Image
+            joint = Image.new("RGB", (gw * len(imgs), gh))
+            for i, im in enumerate(imgs.values()):
+                joint.paste(im, (i * gw, 0))
+        pal = adaptive_palette(joint, self.base_palette, keep)
+        idx = {k: quantize(im, pal, per_tile=c.colors_per_tile) for k, im in imgs.items()}
+        with self.lock:
+            self.img_pal = pal
+            self.image = (idx[0], pal) if 0 in idx else None
+            self.wing_img = {k: v for k, v in idx.items() if k}
+            self._relayout()
+
+    def close_image(self, screen: str | None = None):
+        with self.lock:
+            if screen is None:
+                had = bool(self.img_src)
+                self.img_src.clear()
+            else:
+                sid = 0 if screen == "main" else SIDES[screen]
+                had = sid in self.img_src
+                self.img_src.pop(sid, None)
+            if not had:
+                return
+        self._prepare_images()
+        with self.lock:
+            if not self.img_src:
                 self._apply_screen()                  # back to the message size
+            self._relayout()
+            self._full = True
+            if self.active:
+                self._step()
+
+    def _drop_main_picture(self):
+        """a new message closes the main screen's picture (side screens keep theirs: re-prepared at the message size)"""
+        self.image = None
+        self.img_src.pop(0, None)
+        self._full = True
+        if self.img_src:
+            def again():
+                self._prepare_images()
+                with self.lock:
+                    self._full = True
+                    if self.active:
+                        self._step()
+            threading.Thread(target=again, name="kd-pictures", daemon=True).start()
+        else:
+            self._apply_screen()
+            self._relayout()
+
+    def set_wing_text(self, texts: dict):
+        """the side screens' text: {side ("left" / "right"): (text, tag) or None}. Only the side screens' own pages
+        change (the log is not resent); the regions appear / go when set_wing_text_on changes."""
+        with self.lock:
+            for side, v in texts.items():
+                self.wing_text[SIDES[side]] = v if v and v[0] else (None, None)
+            self._draw_wings()
+            if self.active and not self._full:
+                self.d.present()
+
+    def set_wing_text_on(self, on: bool):
+        """translations will go to the side screens (reserves their text regions: the log gets shorter)"""
+        with self.lock:
+            if bool(on) != self.wing_text_on:
+                self.wing_text_on = bool(on)
+                if not on:
+                    self.wing_text = {}
                 self._relayout()
                 self._full = True
                 if self.active:
                     self._step()
+
+    def _fit_wing(self, text, tag):
+        """the longest start of `text` (+ "…") that fits a side screen's text region with its tag"""
+        from kd_display.kd.memory import Memory
+        c = self.d.cfg
+        lh, W, H = c.line_h(1), c.W, c.H
+        def parts(t):
+            p = [{"s": t, "x": 4, "y": 4, "width": W - 8, "wrap": True, "clip": True}]
+            if tag:
+                p.append({"s": tag, "x": W - 2 - len(tag) * TINY_W, "y": H - 7, "scale": "tiny"})
+            return p
+        def ok(t):
+            lines = self.d.layout.lines(t, W - 8, 1)
+            if len(lines) * lh > H - 12:
+                return False
+            runs = []
+            for q in parts(t):
+                r, _ = self.d.layout.runs(q["s"], q["x"], q["y"], q.get("width"), "left", q.get("scale", 1), 1, 0, False,
+                                          q.get("wrap", False), None, q.get("clip", False))
+                runs += r
+            m = Memory(c)
+            m.set_runs(runs, limit=WING_PAGES * c.P)
+            return m.dropped == 0
+        if ok(text):
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if ok(text[:mid].rstrip() + "…"):
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo].rstrip() + "…" if lo else ""
+
+    def _draw_wings(self):
+        """side screens: pictures, the translations (+ a small language tag), unfolded or not"""
+        d, s, c = self.d, self.s, self.d.cfg
+        for side, name in ((1, "left"), (2, "right")):
+            d.wing_picture(name, self.wing_img.get(side))
+            text, tag = self.wing_text.get(side, (None, None))
+            if text and self.wings_reserved():
+                t = self._fit_wing(text, tag)
+                parts = [{"s": t, "x": 4, "y": 4, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"]}]
+                if tag:
+                    parts.append({"s": tag, "x": c.W - 2 - len(tag) * TINY_W, "y": c.H - 7, "scale": "tiny",
+                                  "color": s["meta"]})
+                d.compose(parts, id=f"wing{side}", screen=name)
+            else:
+                d.remove(f"wing{side}")
+        d.set(wings=self.wings_open(), wing_pages=(WING_PAGES, WING_PAGES))
 
     def status(self) -> dict:
         with self.lock:
@@ -588,16 +739,25 @@ class KdChat:
             return {"active": self.active, "pending_pages": pend, "eta_s": round(pend / self.d.cfg.rate_hz, 1),
                     "synced": all(ok.values()) and not pend, "rate_hz": self.d.cfg.rate_hz,
                     "frames_sent": lk.frames, "messages": len(self.msgs), "image": self.image is not None,
+                    "images": sorted({0: "main", 1: "left", 2: "right"}[k] for k in self.img_src),
+                    "wings": self.wings_open(), "lowres": self.d.cfg.gscale != self.d.cfg.gscale0,
                     "palette": ["#%02x%02x%02x" % tuple(p) for p in self.base_palette],
                     "width": self.d.cfg.W, "height": self.d.cfg.H}
 
     def preview_png(self) -> bytes:
         """what the avatar's screen should show right now (the pages sent so far)"""
         from types import SimpleNamespace
-        from kd.sim import render
+        from kd.sim import render, wings_open
         with self.lock:
             buf = bytearray(self.d.link.sent)
-        return png_bytes(render(SimpleNamespace(cfg=self.d.cfg, buf=buf), t=time.monotonic()), 2)
+        mem = SimpleNamespace(cfg=self.d.cfg, buf=buf)
+        t = time.monotonic()
+        main = render(mem, t=t)
+        if not wings_open(mem):
+            return png_bytes(main, 2)
+        gap = [(0.16, 0.15, 0.14)] * 6                            # the side screens left and right of it
+        left, right = render(mem, t=t, screen=1), render(mem, t=t, screen=2)
+        return png_bytes([a + gap + b + gap + c for a, b, c in zip(left, main, right)], 2)
 
     # ---------------- message layout
     def _deco(self, m):
@@ -752,8 +912,9 @@ class KdChat:
                 for x, k in enumerate(row):
                     g.set(x, y, k)
         else:
-            d.palette(self.base_palette)
+            d.palette(self.img_pal or self.base_palette)
             g.clear()
+        self._draw_wings()
         # the rule under the header: a hardware shape (no bitmap: with no picture the graphics memory stays empty),
         # pinned to the graphics layer (FOLLOW) so the log's shape scrolling does not move it
         if self.header_on:

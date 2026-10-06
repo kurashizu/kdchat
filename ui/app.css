@@ -363,3 +363,22 @@ body.sheet-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* translation: the language list */
+.sec h4.sub { margin: 14px 0 2px; font-size: 12px; font-weight: 600; }
+#trBox { display: grid; gap: 8px; margin-top: 6px; }
+#trBox select { width: 100%; min-height: 34px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg2, transparent); color: inherit; padding: 4px 8px; }
+.tr-models { display: grid; gap: 2px; max-height: 300px; overflow: auto; margin-top: 4px; }
+.tr-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; min-height: 36px; padding: 2px 4px; border-radius: 8px; }
+.tr-row.ready { background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.tr-row .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.tr-row em { font-style: normal; font-size: 12px; color: var(--dim); }
+.tr-row em.ok { color: var(--ok); }
+.tr-row em.err { color: var(--err, #d55); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-row .bar { width: 90px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.tr-row .bar i { display: block; height: 100%; background: var(--accent); }
+/* the side screens: a wider preview; where the next picture goes */
+.device.wide img { width: auto; max-width: 100%; }
+#imgScreen { display: inline-flex; align-items: center; gap: 6px; }
+#imgScreen .lab { font-size: 12px; color: var(--dim); }
+#imgScreen .seg button { padding: 2px 8px; font-size: 12px; }

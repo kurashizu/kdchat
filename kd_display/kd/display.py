@@ -15,6 +15,18 @@ from .link import Link
 from . import shapes as SH
 
 
+SCREENS = {"main": 0, "left": 1, "right": 2}
+
+
+def screen_id(screen):
+    """"main" / "left" / "right" (or 0 / 1 / 2) -> 0 / 1 / 2"""
+    if screen in (0, 1, 2):
+        return screen
+    if screen not in SCREENS:
+        raise ValueError(f'screen must be "main", "left" or "right", not {screen!r}')
+    return SCREENS[screen]
+
+
 class ShapeLayer:
     """16 hardware shapes, drawn by the shader from a 10-byte table entry each (kd/shapes.py): moving / recolouring a
     shape = one frame, no bitmap. Slots are retained: calling a method on slot i again replaces it. Angles in degrees
@@ -27,11 +39,13 @@ class ShapeLayer:
     def __init__(self, cfg):
         self.cfg = cfg
         self.data = [None] * cfg.shp_n
+        self.screen = [0] * cfg.shp_n           # 0 main, 1 left wing, 2 right wing (wing coordinates: its own screen)
 
     def _put(self, i, kind, coords, raw=(), fill=None, color=1, width=1, pattern="solid", round_caps=False, above=False,
-             xor=False, follow=False, anim=None):
+             xor=False, follow=False, anim=None, screen="main"):
         if not 0 <= i < self.cfg.shp_n:
             raise IndexError(f"shape slot {i} (0..{self.cfg.shp_n - 1})")
+        self.screen[i] = screen_id(screen)
         a, sp = None, 0
         if anim:
             a, v = anim
@@ -91,6 +105,24 @@ class ShapeLayer:
 
     def clear(self):
         self.data = [None] * self.cfg.shp_n
+        self.screen = [0] * self.cfg.shp_n
+
+    def physical(self):
+        """-> (slot data in memory order, wing_shp register): main shapes first, then the left wing's, then the right's
+        (a wing's range starts at slot >= 1: 0 means none, so slot 0 stays empty when only wings have shapes)"""
+        used = [i for i in range(self.cfg.shp_n) if self.data[i] is not None]
+        groups = [[i for i in used if self.screen[i] == k] for k in (0, 1, 2)]
+        order = groups[0][:]
+        if not order and (groups[1] or groups[2]):
+            order.append(None)
+        starts = []
+        for k in (1, 2):
+            starts.append(len(order) if groups[k] else 0)
+            order += groups[k]
+        if len(order) > self.cfg.shp_n:
+            raise ValueError("too many shapes (an empty slot 0 is needed when only wings have shapes)")
+        data = [self.data[i] if i is not None else None for i in order] + [None] * (self.cfg.shp_n - len(order))
+        return data, ((starts[0] & 15) << 4) | (starts[1] & 15)
 
     def free(self):
         """the first empty slot (or None)"""
@@ -111,11 +143,13 @@ class Display:
         self.mem = Memory(self.cfg)
         self.items = {}                      # id -> runs, in draw order
         self.item_opts = {}                  # id -> (move, page, x, y)
+        self.item_screen = {}                # id -> 0 main, 1 left wing, 2 right wing
+        self.wing_gfx = {}                   # 1 / 2 -> Canvas: a wing's picture (low-resolution mode only)
         self.clip_count = {}                 # id -> glyphs left out (outside the screen)
         self._next = 1
         self.photo_gray = None
         c = self.cfg.raw["color"]
-        self.state = dict(on=True, invert=False, gfx=True, text=True, mono=False, mono_fg=c["mono_fg"], mono_bg=c["mono_bg"],
+        self.state = dict(on=True, wings=False, wing_pages=None, invert=False, gfx=True, text=True, mono=False, mono_fg=c["mono_fg"], mono_bg=c["mono_bg"],
                           dither=False, sprites=True, window=None, gfx_x=0, gfx_y=0, text_x=0, text_y=0,
                           gfx_vx=0, gfx_vy=0, text_vx=0, text_vy=0, zoom=1, mirror_x=False, mirror_y=False,
                           cycle=None, blink=None, text_wrap=None, text_clip=None, size_m=self.cfg.size_m,
@@ -167,14 +201,20 @@ class Display:
 
     # ---------------- text
     def text(self, s, x=0, y=0, width=None, align="left", scale=1, color=1, bg=0, box=False, invert=False,
-             wrap=True, line_h=None, id=None, clip=True, move=False, page=False, pages=None):
+             wrap=True, line_h=None, id=None, clip=True, move=False, page=False, pages=None, screen="main"):
         """color / bg: palette indices; box: paint the background; invert: box with the colours swapped.
         move: this text moves with text_x / text_y (and their speeds); once any item moves, only the moving items do,
         they are drawn after the others, wrap with text_wrap and are clipped to text_clip. Positions may lie beyond the
         screen (with clip=False): long marquee lines, a scrolled log.
         page: the item owns whole memory pages (padding, runs split at page ends): each of its pages can arrive in any
         order with any other page item's pages, so a changed line never blanks or moves other text (a chat line).
-        pages: a fixed number of pages for it (it is cut to fit; it never moves the items after it)."""
+        pages: a fixed number of pages for it (it is cut to fit; it never moves the items after it).
+        screen: "main", or "left" / "right" = a side screen (in its own coordinates; shows while the wings are open,
+        d.set(wings=True); it never moves). Wing text goes into its wing's region of the text area (config
+        wings.text_pages, d.set(wing_pages=...))."""
+        sid = screen_id(screen)
+        if sid and move:
+            raise ValueError("wing text cannot move")
         if scale not in (1, 2, "small", "tiny"):
             raise ValueError('text scale must be 1, 2, "small" (5x7 ASCII) or "tiny" (3x5 ASCII)')
         if scale in ("small", "tiny") and box:
@@ -187,10 +227,11 @@ class Display:
             id = self._next; self._next += 1
         self.items[id] = runs
         self.item_opts[id] = (move, page or bool(pages), x, y, pages)
+        self.item_screen[id] = sid
         self.clip_count[id] = self.layout.clipped - before
         return id
 
-    def compose(self, parts, id=None, move=False, page=False, pages=None):
+    def compose(self, parts, id=None, move=False, page=False, pages=None, screen="main"):
         """several texts as ONE item (one page group: a chat line with its divider). parts: dicts with the text()
         arguments s, x, y, width, align, scale, color, bg, box (wrap and clip default to False). -> id"""
         runs = []
@@ -204,6 +245,7 @@ class Display:
             id = self._next; self._next += 1
         self.items[id] = runs
         self.item_opts[id] = (move, page or bool(pages), 0, 0, pages)
+        self.item_screen[id] = screen_id(screen)
         self.clip_count[id] = self.layout.clipped - before
         return id
 
@@ -230,10 +272,12 @@ class Display:
     def remove(self, id):
         self.items.pop(id, None)
         self.item_opts.pop(id, None)
+        self.item_screen.pop(id, None)
 
     def clear_text(self):
         self.items.clear()
         self.item_opts.clear()
+        self.item_screen.clear()
 
     def marquee(self, s, y0, y1, direction="left", speed=40, scale=1, color=1, x=0, width=None, align="left",
                 gap=None, id="marquee"):
@@ -337,13 +381,17 @@ class Display:
             return
         self.cfg.set_size(i, gs)
         self.gfx = Canvas(self.cfg.GW, self.cfg.GH)
+        self.wing_gfx = {}                            # (pictures of the old size / resolution)
         self.photo_gray = None
 
     def sprite(self, i, x=None, y=None, pattern=None, colors=None, visible=None, flip_x=None, flip_y=None,
-               double=None, above_text=None):
+               double=None, above_text=None, screen=None):
         """hardware sprite i: x, y screen px of its top left; pattern rows of 0..3 (0 transparent) or strings;
-        colors = palette indices of values 1, 2, 3; double = 2 screen px per sprite pixel; above_text draws it over text"""
+        colors = palette indices of values 1, 2, 3; double = 2 screen px per sprite pixel; above_text draws it over text;
+        screen "main" / "left" / "right" (a wing: its own coordinates)"""
         sp = self.sprites[i]
+        if screen is not None:
+            sp["screen"] = screen_id(screen)
         x = None if x is None else int(round(x)); y = None if y is None else int(round(y))
         for k, v in (("x", x), ("y", y), ("pattern", pattern), ("colors", colors), ("visible", visible),
                      ("flip_x", flip_x), ("flip_y", flip_y), ("double", double), ("above", above_text)):
@@ -351,6 +399,23 @@ class Display:
                 sp[k] = v
         if pattern is not None and visible is None:
             sp["visible"] = True
+
+    def wing_picture(self, side, pixels=None):
+        """a picture on a side screen ("left" / "right"): rows of palette indices at the low-resolution graphics size
+        (cfg.GW x cfg.GH after set_size(i, lowres=True)); None removes it. The palette is shared by all screens and every
+        8x8 tile keeps at most 4 colours, like the main screen's. -> the wing's Canvas (draw into it, then present())"""
+        k = screen_id(side)
+        if k == 0:
+            raise ValueError("wing_picture: side must be left or right (the main screen's picture is d.gfx)")
+        if pixels is None:
+            self.wing_gfx.pop(k, None)
+            return None
+        cv = Canvas(self.cfg.GW, self.cfg.GH)
+        for y, row in enumerate(pixels[:self.cfg.GH]):
+            for x, v in enumerate(row[:self.cfg.GW]):
+                cv.set(x, y, v)
+        self.wing_gfx[k] = cv
+        return cv
 
     # ---------------- view helpers (driver side: draw where the screen shows, whatever the offsets are)
     def gfx_xy(self, sx, sy):
@@ -386,24 +451,44 @@ class Display:
     def present(self):
         m, st = self.mem, self.state
         clipped = sum(self.clip_count.get(i, 0) for i in self.items)
+        wings_cfg = self.cfg.wings
+        wpics = {k: c for k, c in self.wing_gfx.items() if c is not None}
+        if wpics and (self.photo_gray is not None or self.cfg.gscale == self.cfg.gscale0):
+            raise ValueError("wing pictures need the low-resolution mode (set_size(i, lowres=True)) and no photo")
         if self.photo_gray is not None:
             m.set_photo(self.photo_gray)
         elif not self.gfx_manual:
             m.clear_gfx(); m.set_gfx(self.gfx.px)
+            for k, cv in wpics.items():
+                m.set_gfx(cv.px, tile0=self.cfg.wing_tiles[k - 1])
+        if wings_cfg:
+            m.reg("wing_gl", self.cfg.wing_tiles[0] if 1 in wpics else 0)
+            m.reg("wing_gr", self.cfg.wing_tiles[1] if 2 in wpics else 0)
         from .memory import Page
-        moving = any(o[0] for o in self.item_opts.values())
-        order = sorted(self.items, key=lambda i: bool(moving and self.item_opts.get(i, (False,))[0]))   # stable: still before moving
-        runs, first_move = [], None
-        for i in order:
-            mv, pg, x, y, npg = self.item_opts.get(i, (False, False, 0, 0, None))
-            if moving and mv and first_move is None:
-                first_move = len(runs)
-            if pg:
-                runs.append(Page(True, 0, y, npg))
-            runs += self.items[i]
-            if pg:
-                runs.append(Page(False, 0, y, npg))
-        used, glyphs = m.set_runs(runs)
+        scr = lambda i: self.item_screen.get(i, 0)
+        moving = any(o[0] for i, o in self.item_opts.items() if not scr(i))
+        order = sorted((i for i in self.items if not scr(i)),
+                       key=lambda i: bool(moving and self.item_opts.get(i, (False,))[0]))   # stable: still before moving
+
+        def runs_of(ids, mark_move=False):
+            runs, first = [], None
+            for i in ids:
+                mv, pg, x, y, npg = self.item_opts.get(i, (False, False, 0, 0, None))
+                if mark_move and moving and mv and first is None:
+                    first = len(runs)
+                if pg:
+                    runs.append(Page(True, 0, y, npg))
+                runs += self.items[i]
+                if pg:
+                    runs.append(Page(False, 0, y, npg))
+            return runs, first
+        runs, first_move = runs_of(order, True)
+        wing_runs = {k - 1: runs_of([i for i in self.items if scr(i) == k])[0] for k in (1, 2)}
+        if wings_cfg:
+            wp = st["wing_pages"] or self.cfg.wing_text_pages
+            used, glyphs = m.set_text(runs, {k: r for k, r in wing_runs.items() if r}, wp)
+        else:
+            used, glyphs = m.set_runs(runs)
         move_from = 0                                 # 0: everything moves (no item asked for move)
         if moving:
             idx = [k for k in m.run_index[first_move:] if k is not None] if first_move is not None else []
@@ -412,7 +497,8 @@ class Display:
         if "screen" in self.cfg.regs:
             m.reg("screen", self.cfg.screen_reg())
         if "show" in self.cfg.regs:
-            m.reg("show", 1 if st["on"] else 0)               # the device's appear / leave (FX layer KD Show)
+            # the device's appear / leave (FX layer KD Show) | 2: the side screens unfold (FX layer KD Wings)
+            m.reg("show", (1 | (2 if st["wings"] and wings_cfg else 0)) if st["on"] else 0)
         if "size" in self.cfg.regs:                         # 1..255 = size_min..size_max (0 = not set: the default)
             c = self.cfg
             m.reg("size", 1 + round((st["size_m"] - c.size_min) / (c.size_max - c.size_min) * 254))
@@ -435,8 +521,11 @@ class Display:
             m.reg("shape_x", st["shape_x"] % self.cfg.W); m.reg("shape_y", st["shape_y"] % self.cfg.H)
             for k in ("shape_vx", "shape_vy"):
                 m.reg(k, max(-128, min(127, int(st[k]))) & 0xFF)
+            data, wing_shp = self.shapes.physical() if wings_cfg else (self.shapes.data, 0)
             for i in range(self.cfg.shp_n):
-                m.set_shape(i, self.shapes.data[i])
+                m.set_shape(i, data[i])
+            if wings_cfg:
+                m.reg("wing_shp", wing_shp)
         m.reg("fx", self.fx)
         cy = st["cycle"]
         m.reg("cycle", ((cy[0] & 15) << 4) | (cy[1] & 15) if cy else 0)
@@ -454,6 +543,8 @@ class Display:
             m.reg("win_y", ((y0 // q & 15) << 4) | (max(0, (y1 - 1)) // q & 15))
         else:
             m.reg("win_x", 0); m.reg("win_y", 0)
+        if wings_cfg:
+            m.reg("wing_spr", sum((sp.get("screen", 0) & 3) << (2 * i) for i, sp in enumerate(self.sprites)))
         for i, sp in enumerate(self.sprites):
             attr = ((SPR_VISIBLE if sp["visible"] else 0) | (SPR_FLIPX if sp["flip_x"] else 0) | (SPR_FLIPY if sp["flip_y"] else 0)
                     | (SPR_DOUBLE if sp["double"] else 0) | (SPR_ABOVE if sp["above"] else 0))
