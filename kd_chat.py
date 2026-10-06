@@ -74,14 +74,16 @@ CHOICES = {
     "wings": ("auto", "on", "off"),
 }
 WING_PAGES = 4                # text pages of each side screen's region in the single layout (the newest translation)
-MIRROR_PAGES = 17             # chat layout with translations: each screen gets a third of the text area (header + 8 line
-                             # slots of 2 pages): the side screens show the same log, translated, in step with the main one
+MIRROR_PAGES = 17             # chat layout with translations: a side screen's region (header + 16 line slot pages): the
+                             # side screens show the log translated, each scrolling on its own
 SIDES = {"left": 1, "right": 2}
 COLOR_KEYS = ("color", "accent", "meta", "alt")
 HDR = 10                     # header height: one 3x5 line (time zone + time | date), 2 px space, a 2 px rule
 DIVIDER = 3                  # the dividers between messages: dark grey (subtle)
-SHP_RULE, SHP_LOG0 = 0, 1     # hardware shapes: the header rule; from 1 on the log's dividers and the draft caret
-SHP_WING = 14                # 14, 15: the side screens' header rules
+SHP_RULE, SHP_LOG0 = 0, 1     # hardware shapes: the header rule; 1..7 the log's dividers / rules and the draft caret
+SHP_WING = 8                 # 8, 9: the side screens' header rules
+SHP_WLOG = {1: range(10, 16), 2: range(16, 24)}   # the side screens' rules beside the time labels
+# (a side screen's shapes are a range in memory starting at slot <= 15: main <= 8 + left <= 7)
 TYPING_COLOR = 15            # the typing indicator: its own palette colour (cream), never offered as a choice
 SPEED = {"left": {"slow": 20, "normal": 36, "fast": 60}, "up": {"slow": 8, "normal": 14, "fast": 22}}
 SLOT_MEM = -(-Config().text_bytes // Config().P) - 1   # memory pages for the line slots (the text area's pages, the header takes 1)
@@ -280,6 +282,20 @@ def _related(a: str, b: str) -> bool:
     return n > 0 and n >= min(len(a), len(b)) // 2
 
 
+class _Log:
+    """one screen's chat log (0 main, 1 left, 2 right): its line slots and its scroll. The main log's message layout
+    lives in the messages themselves; a side screen's in lay (message id -> lines, gap, vy0, h, sc, deco, split)."""
+
+    def __init__(self, k):
+        self.k = k
+        self.S = 0                           # scroll: virtual y at the top of the log band
+        self.phase2 = None                   # scroll value waiting for its rows to be out
+        self.slots: list = []                # row key per slot (None = empty)
+        self.sig: list = []                  # what each slot was drawn with
+        self.parts: list = []
+        self.lay: dict = {}
+
+
 class KdChat:
     def __init__(self, host: str, port: int, dry: bool = False, settings: dict | None = None, log=None, run=True):
         self.lock = threading.RLock()
@@ -303,13 +319,9 @@ class KdChat:
         self._next_id = 1
         self._minute = None
         self._stop = False
-        # what is on the air (chat layout)
-        self.S = 0                           # scroll: virtual y at the top of the log band
-        self.slots: list = []                # row key per slot (None = empty)
-        self.slot_sig: list = []             # what each slot was drawn with
-        self.slot_parts: list = []
-        self.slot_wparts: list = []          # side -> parts of that slot on the side screens (mirror mode)
-        self._phase2 = None                  # scroll value waiting for its rows to be out
+        # what is on the air (chat layout): the main log and the side screens' translated logs, each with its own scroll
+        self.logs = [_Log(0), _Log(1), _Log(2)]
+        self.small_langs: set = set()        # languages shown in the small font (5x7) on the side screens / main log
         self._full = True                    # redraw everything at the next step
         self._single_sig = None
         self._wait = set()                   # pages the last step changed (the next step waits for them)
@@ -344,25 +356,65 @@ class KdChat:
 
     @property
     def K(self):
-        """line slots: visible lines + a partial one + the next one"""
+        """line slots of the main log: visible lines + a partial one + the next one"""
         if self.mirror():
-            return (MIRROR_PAGES - 1) // self.slot_pages if self.slot_pages == 2 else 14
-        mem = SLOT_MEM - (2 * WING_PAGES if self.wings_reserved() else 0)
+            mem = SLOT_MEM - MIRROR_PAGES * sum(1 for side in (1, 2) if self.wlog_on(side))
+        else:
+            mem = SLOT_MEM - (2 * WING_PAGES if self.wings_reserved() else 0)
         return min(14, mem) if self.slot_pages == 1 else min(10, mem // 2)   # (14 / 10: the run limit; fills 96x176)
 
+    @property
+    def S(self):
+        return self.logs[0].S
+
     def mirror(self):
-        """chat layout with translations on the side screens: three logs, line by line in step"""
+        """chat layout with translations on the side screens: the log translated there, each screen scrolling alone"""
         return self.s["layout"] == "chat" and self.wing_text_on and self.s["wings"] != "off" and any(self.wing_lang)
+
+    def wlog_on(self, side):
+        """does side screen 1 / 2 show a translated log?"""
+        return self.mirror() and self.wing_lang[side - 1] is not None
+
+    def log_on(self, k):
+        return k == 0 or self.wlog_on(k)
+
+    def wsc(self, side):
+        """a side screen's text scale: the small font when its language is one of small_langs"""
+        return "small" if self.wing_lang[side - 1] in self.small_langs else self.s["scale"]
+
+    def msc(self, m):
+        """a main log message's text scale"""
+        return "small" if m.get("reverted") or m.get("lang") in self.small_langs else self.s["scale"]
+
+    def pages_of(self, k):
+        """pages per line slot: a side screen in the small font has 1-page lines (21 ASCII glyphs) and its time labels
+        get rows of their own"""
+        return 1 if k and self.wsc(k) == "small" else self.slot_pages
+
+    def K_of(self, k):
+        return min(16, (MIRROR_PAGES - 1) // self.pages_of(k)) if k else self.K
+
+    def lh_of(self, k):
+        return self.d.cfg.line_h(self.wsc(k) if k else self.s["scale"])
+
+    def gh_of(self, k):
+        return self.d.cfg.glyph_h(self.wsc(k) if k else self.s["scale"])
+
+    def gap_of(self, k):
+        return 8 if k else self.gap
 
     def wings_reserved(self):
         """do the side screens get their text regions (the log has 2 x WING_PAGES pages less)?"""
         return self.s["wings"] == "on" or (self.s["wings"] == "auto" and (self.wing_text_on or bool(self.wing_img)))
 
     def wings_open(self):
+        """-> the side screens that are unfolded (1 left, 2 right): each one while it has something to show"""
         if self.s["wings"] == "off" or not self.active:
-            return False
-        return (self.s["wings"] == "on" or bool(self.wing_img) or any(t for t, _ in self.wing_text.values())
-                or self.mirror())
+            return frozenset()
+        if self.s["wings"] == "on":
+            return frozenset((1, 2))
+        return frozenset(side for side in (1, 2) if self.wing_img.get(side) or self.wlog_on(side)
+                         or (self.wing_text.get(side) or (None,))[0])
 
     @property
     def lh(self):
@@ -389,7 +441,12 @@ class KdChat:
         """first row of the log band (the header above it). Revealing a line writes it below the band first: the band +
         the gap + one glyph must fit the 128 px ring (a screen lower than the ring leaves that room by itself)."""
         # (and on tall screens: no more lines than the slots hold, K - 2 visible + a partial + the next one)
-        return max(HDR if self.header_on else 0, self.d.cfg.H - RING + self.gap + self.gh, self.d.cfg.H - (self.K - 2) * self.lh)
+        H = self.d.cfg.H
+        t = HDR if self.header_on or self.mirror() else 0          # (a side screen always has its language header)
+        for k in (0, 1, 2):
+            if self.log_on(k):
+                t = max(t, H - RING + self.gap_of(k) + self.gh_of(k), H - (self.K_of(k) - 2) * self.lh_of(k))
+        return t
 
     @property
     def band(self):
@@ -696,18 +753,18 @@ class KdChat:
                 if self.active:
                     self._step()
 
-    def _fit_wing(self, text, tag):
+    def _fit_wing(self, text, tag, sc=1):
         """the longest start of `text` (+ "…") that fits a side screen's text region with its tag"""
         from kd_display.kd.memory import Memory
         c = self.d.cfg
-        lh, W, H = c.line_h(1), c.W, c.H
+        lh, W, H = c.line_h(sc), c.W, c.H
         def parts(t):
-            p = [{"s": t, "x": 4, "y": 4, "width": W - 8, "wrap": True, "clip": True}]
+            p = [{"s": t, "x": 4, "y": 4, "width": W - 8, "wrap": True, "clip": True, "scale": sc}]
             if tag:
                 p.append({"s": tag, "x": W - 2 - len(tag) * TINY_W, "y": H - 7, "scale": "tiny"})
             return p
         def ok(t):
-            lines = self.d.layout.lines(t, W - 8, 1)
+            lines = self.d.layout.lines(t, W - 8, sc)
             if len(lines) * lh > H - 12:
                 return False
             runs = []
@@ -742,43 +799,65 @@ class KdChat:
                 d.compose([{"s": label, "x": 1, "y": 1, "scale": "tiny", "color": s["meta"]}],
                           id=f"wh{side}", page=True, pages=1, screen=name)
                 d.shapes.rect(SHP_WING + side - 1, 0, HDR - 2, c.W, c.gscale, color=s["meta"], fill=s["meta"], width=0,
-                              screen=name)
+                              screen=name, follow=True)              # (follow: a side screen's log shapes scroll)
             else:
                 d.remove(f"wh{side}")
                 d.shapes.hide(SHP_WING + side - 1)
             text, tag = self.wing_text.get(side, (None, None))
             if text and self.wings_reserved() and not mirror:
-                t = self._fit_wing(text, None)
+                sc = "small" if lang in self.small_langs else 1
+                t = self._fit_wing(text, None, sc)
                 top = HDR + 2 if lang else 4
-                d.compose([{"s": t, "x": 4, "y": top, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"]}],
-                          id=f"wing{side}", screen=name)
+                d.compose([{"s": t, "x": 4, "y": top, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"],
+                            "scale": sc}], id=f"wing{side}", screen=name)
             else:
                 d.remove(f"wing{side}")
         pages = MIRROR_PAGES if mirror else WING_PAGES
-        d.set(wings=self.wings_open(), wing_pages=(pages, pages))
+        d.set(wings=self.wings_open(), wing_pages=(pages, pages))      # (a side screen without text gets no region)
 
     def set_wing_langs(self, left, right, labels=(None, None)):
-        """which language each side screen shows (None: that screen stays empty); labels: their header text"""
+        """which language each side screen shows (None: that screen stays empty and folds); labels: their header text"""
         with self.lock:
             new = [left, right]
             if new != self.wing_lang or list(labels) != self.wing_label:
+                for side in (1, 2):
+                    if new[side - 1] != self.wing_lang[side - 1]:
+                        self.wing_text.pop(side, None)            # (the newest translation was in the old language)
                 self.wing_lang, self.wing_label = new, list(labels)
                 self._relayout()
                 self._full = True
                 if self.active:
                     self._step()
 
-    def set_translations(self, mid, trs: dict):
-        """{language: text} of a message (its translations): the side screens show them in step with the main log"""
+    def set_translations(self, mid, trs: dict, lang=None):
+        """{language: text} of a message (its translations) and its own language: the side screens' logs show them"""
         with self.lock:
             m = next((x for x in self.msgs if x["id"] == mid), None)
             if m is None:
                 return False
             m["tr"] = dict(trs)
-            self._relayout()
+            if lang:
+                m["lang"] = lang
+            if m is self.msgs[-1] and not self._full:
+                self._relayout(last_only=True)
+            else:
+                self._relayout()
+                self._full = True
             if self.active:
                 self._step()
             return True
+
+    def set_small_langs(self, langs):
+        """languages written in the small font (5x7, 21 per line on 176 px): the side screens showing one, and main log
+        messages written in one"""
+        with self.lock:
+            new = set(langs or ())
+            if new != self.small_langs:
+                self.small_langs = new
+                self._relayout()
+                self._full = True
+                if self.active:
+                    self._step()
 
     def status(self) -> dict:
         with self.lock:
@@ -789,7 +868,7 @@ class KdChat:
                     "synced": all(ok.values()) and not pend, "rate_hz": self.d.cfg.rate_hz,
                     "frames_sent": lk.frames, "messages": len(self.msgs), "image": self.image is not None,
                     "images": sorted({0: "main", 1: "left", 2: "right"}[k] for k in self.img_src),
-                    "wings": self.wings_open(), "lowres": self.d.cfg.gscale != self.d.cfg.gscale0,
+                    "wings": sorted({1: "left", 2: "right"}[k] for k in self.wings_open()), "lowres": self.d.cfg.gscale != self.d.cfg.gscale0,
                     "palette": ["#%02x%02x%02x" % tuple(p) for p in self.base_palette],
                     "width": self.d.cfg.W, "height": self.d.cfg.H}
 
@@ -804,27 +883,34 @@ class KdChat:
         main = render(mem, t=t)
         if not wings_open(mem):
             return png_bytes(main, 2)
-        gap = [(0.16, 0.15, 0.14)] * 6                            # the side screens left and right of it
-        left, right = render(mem, t=t, screen=1), render(mem, t=t, screen=2)
-        return png_bytes([a + gap + b + gap + c for a, b, c in zip(left, main, right)], 2)
+        gap = [(0.16, 0.15, 0.14)] * 6                            # the unfolded side screens left / right of it
+        rows = main
+        if wings_open(mem, 1):
+            rows = [a + gap + b for a, b in zip(render(mem, t=t, screen=1), rows)]
+        if wings_open(mem, 2):
+            rows = [a + gap + b for a, b in zip(rows, render(mem, t=t, screen=2))]
+        return png_bytes(rows, 2)
 
     # ---------------- message layout
-    def _deco(self, m):
-        """the time label / divider in the gap above a message, y relative to the gap's top -> text parts"""
-        s, W = self.s, self.d.cfg.W
-        parts = []
-        ink = (self.gap - 2) // 2                                   # the divider's pixel row in the gap
-        label = " ".join(x for x in ("edited" if m.get("edited") and not m.get("reverted") else "",
-                                     f"{tz_label(m['t'])} {m['t'].strftime('%H:%M')}" if s["show_time"] else "") if x)
-        if label:                                                   # one line, right-aligned
-            parts.append({"s": label, "x": W - 1 - (len(label) * TINY_W - 1), "y": 1, "scale": "tiny", "color": s["meta"]})
-            # the time label is the separator (with a rule as well, a whole first line would not fit its slot)
-        # (the divider without a label is a hardware shape: _log_shapes)
-        return parts
+    def _label(self, m, wing=False):
+        """the time label in the gap above a message ("edited" + time zone + time); a side screen always shows the time"""
+        s = self.s
+        return " ".join(x for x in ("edited" if m.get("edited") and not m.get("reverted") else "",
+                                    f"{tz_label(m['t'])} {m['t'].strftime('%H:%M')}" if s["show_time"] or wing else "") if x)
 
-    def _lines(self, text, deco, sc=None):
-        """text -> lines that each fit a line slot (2 pages), the first one together with its decorations"""
+    def _deco(self, m, wing=False):
+        """the time label in the gap above a message, y relative to the gap's top -> text parts (right-aligned; the rule
+        left of it and the divider without a label are hardware shapes: _log_shapes)"""
+        label = self._label(m, wing)
+        if not label:
+            return []
+        return [{"s": label, "x": self.d.cfg.W - 1 - (len(label) * TINY_W - 1), "y": 1, "scale": "tiny",
+                 "color": self.s["meta"]}]
+
+    def _lines(self, text, deco, sc=None, pages=None):
+        """text -> lines that each fit a line slot (`pages` pages), the first one together with its decorations"""
         d, sc = self.d, sc or self.s["scale"]
+        pages = pages or self.slot_pages
         out = []
         for para in text.split("\n"):
             rest = para
@@ -833,7 +919,7 @@ class KdChat:
                 line = "".join(ch[3] for ch in ls[0]) if ls and ls[0] else ""
                 parts = deco if not out else []
                 n = len(line)
-                while n > 1 and not d.fits_pages(parts + [{"s": line[:n], "scale": sc}], self.slot_pages):
+                while n > 1 and not d.fits_pages(parts + [{"s": line[:n], "scale": sc}], pages):
                     n -= 1
                 if n == 0 and rest:
                     n = 1
@@ -848,24 +934,34 @@ class KdChat:
     def _layout_msg(self, m, gap):
         labelled = self.s["show_time"] or (m.get("edited") and not m.get("reverted"))
         m["gap"] = (8 if labelled else 4) if gap else (8 if labelled else 0)     # (a label also above the first one)
-        m["sc"] = "small" if m.get("reverted") else self.s["scale"]
+        m["sc"] = self.msc(m)
         body = "message reverted" if m.get("reverted") else m["text"]
+        m["deco"] = self._deco(m)
         # measured at a positive y (the divider sits a few px above the gap: its runs must be representable there)
-        deco = [dict(p, y=p["y"] + 32) for p in self._deco(m)] if m["gap"] else []
+        deco = [dict(p, y=p["y"] + 32) for p in m["deco"]] if m["gap"] else []
         m["lines"] = self._lines(body, deco, m["sc"])
-        # the side screens' lines (mirror mode): the translations; the message takes the rows of its longest language
-        m["wl"] = {}
-        if self.mirror() and not m.get("reverted") and not m.get("draft"):
-            for side in (1, 2):
-                lang = self.wing_lang[side - 1]
-                t = (m.get("tr") or {}).get(lang) if lang else None
-                if t:
-                    m["wl"][side] = self._lines(t, [], m["sc"])
-        n = max([len(m["lines"])] + [len(v) for v in m["wl"].values()])
-        m["h"] = m["gap"] + n * self.lh
+        m["h"] = m["gap"] + len(m["lines"]) * self.d.cfg.line_h(m["sc"])
+
+    def _wing_entry(self, side, m, vy0):
+        """a message on a side screen's log: its translation (or itself, written in that language); one not translated
+        (yet) takes no room there"""
+        lang = self.wing_lang[side - 1]
+        had = (m.get("tr") or {}).get(lang) or (m["text"] if m.get("lang") == lang else None)
+        e = {"lines": [], "gap": 0, "h": 0, "vy0": vy0, "sc": self.wsc(side), "deco": [], "split": False}
+        if not had or m.get("draft"):
+            return e
+        text = "message reverted" if m.get("reverted") else had
+        e["sc"] = "small" if m.get("reverted") else self.wsc(side)
+        e["deco"] = self._deco(m, wing=True)
+        e["split"] = self.pages_of(side) == 1                       # 1-page slots: the time label in a row of its own
+        deco = [] if e["split"] else [dict(p, y=p["y"] + 32) for p in e["deco"]]
+        e["lines"] = self._lines(text, deco, e["sc"], self.pages_of(side))
+        e["gap"] = 8
+        e["h"] = 8 + len(e["lines"]) * self.d.cfg.line_h(e["sc"])
+        return e
 
     def _relayout(self, last_only=False):
-        """line breaks + virtual positions of the messages (last_only: only the newest changed / is new)"""
+        """line breaks + virtual positions of the messages (last_only: only the newest changed / is new), on every log"""
         msgs = self.msgs
         for i in range(len(msgs) - 1 if last_only else 0, len(msgs)):
             if i < 0:
@@ -873,6 +969,22 @@ class KdChat:
             m = msgs[i]
             m["vy0"] = msgs[i - 1]["vy0"] + msgs[i - 1]["h"] if i else 0
             self._layout_msg(m, gap=i > 0)
+        for side in (1, 2):
+            log = self.logs[side]
+            if not self.wlog_on(side):
+                log.lay = {}
+                continue
+            first = len(msgs) - 1 if last_only and all(m["id"] in log.lay for m in msgs[:-1]) else 0
+            if first <= 0:
+                log.lay, first = {}, 0
+            prev = log.lay.get(msgs[first - 1]["id"]) if first else None
+            vy0 = prev["vy0"] + prev["h"] if prev else 0
+            keep = {m["id"] for m in msgs}
+            log.lay = {k: v for k, v in log.lay.items() if k in keep}
+            for m in msgs[first:]:
+                e = self._wing_entry(side, m, vy0)
+                log.lay[m["id"]] = e
+                vy0 += e["h"]
 
     def _all(self):
         """the messages incl. the draft (a pseudo message at the end)"""
@@ -887,35 +999,55 @@ class KdChat:
             msgs.append(self._draft_cache[1])
         return msgs
 
-    def _rows(self, msgs):
-        """-> {row key: (vy of the line, parts at ring positions, signature, top incl. the gap above)} for every line"""
-        rows = {}
-        s, top, lh = self.s, self.top, self.lh
-        ring = lambda v: (top + v) % RING
-        real = [m for m in msgs if not m.get("draft")]
+    def _entries(self, k, msgs):
+        """-> [(message, its layout on log k)] of the messages shown there"""
+        if k == 0:
+            return [(m, m) for m in msgs]
+        lay = self.logs[k].lay
+        return [(m, lay[m["id"]]) for m in msgs if m["id"] in lay and lay[m["id"]]["lines"]]
+
+    def _colors(self, k, msgs):
+        """-> {message id: colour} on log k (drafts / reverted grey, the newest highlighted, the others alternating)"""
+        s = self.s
+        ents = self._entries(k, msgs)
+        real = [m for m, _ in ents if not m.get("draft")]
         newest = real[-1]["id"] if real else None
-        for m in msgs:
+        out = {}
+        for m, _ in ents:
             if m.get("draft") or m.get("reverted"):
-                col = s["meta"]
+                out[m["id"]] = s["meta"]
             elif s["highlight"] and m["id"] == newest:
-                col = s["accent"]
+                out[m["id"]] = s["accent"]
             else:                                                   # alternate, by id: stable while the log scrolls
-                col = s["alt"] if s["alt"] and m["id"] % 2 else s["color"]
-            vy = m["vy0"] + m["gap"]
-            wl = m.get("wl") or {}
-            nrows = max([len(m["lines"])] + [len(v) for v in wl.values()])
-            for k in range(nrows):
-                parts = []
-                if k == 0 and m["gap"]:
-                    parts = [dict(p, y=ring(m["vy0"] + p["y"])) for p in self._deco(m)]
-                if k < len(m["lines"]):
-                    parts.append({"s": m["lines"][k], "x": 0, "y": ring(vy), "scale": m.get("sc", s["scale"]), "color": col})
-                wparts = {side: [{"s": v[k], "x": 0, "y": ring(vy), "scale": m.get("sc", s["scale"]), "color": col}]
-                          for side, v in wl.items() if k < len(v)}
-                sig = tuple((p["s"], p["x"], p["y"], p.get("scale", 1), p["color"]) for p in parts) + \
-                    tuple((side, p["s"], p["y"], p["color"]) for side in sorted(wparts) for p in wparts[side])
-                top_y = vy - (m["gap"] if k == 0 else 0)
-                rows[(m["id"], k)] = (vy, parts, sig, top_y, wparts)
+                out[m["id"]] = s["alt"] if s["alt"] and m["id"] % 2 else s["color"]
+        return out
+
+    def _T(self, k, msgs):
+        """the virtual height of log k"""
+        ents = self._entries(k, msgs)
+        return ents[-1][1]["vy0"] + ents[-1][1]["h"] if ents else 0
+
+    def _rows(self, k, msgs):
+        """-> {row key: (vy, parts at ring positions, signature, top incl. the gap above, ink bottom, end)} for every
+        line of log k (and, split, every time label row)"""
+        rows = {}
+        top = self.top
+        ring = lambda v: (top + v) % RING
+        cols = self._colors(k, msgs)
+        sig_of = lambda parts: tuple((p["s"], p["x"], p["y"], p.get("scale", 1), p["color"]) for p in parts)
+        for m, e in self._entries(k, msgs):
+            col = cols[m["id"]]
+            c = self.d.cfg
+            lh, gh = c.line_h(e["sc"]), c.glyph_h(e["sc"])
+            vy = e["vy0"] + e["gap"]
+            deco = [dict(p, y=ring(e["vy0"] + p["y"])) for p in e.get("deco", [])] if e["gap"] else []
+            if e.get("split") and deco:
+                rows[(m["id"], -1)] = (e["vy0"] + 1, deco, sig_of(deco), e["vy0"], e["vy0"] + 6, vy)
+                deco = []
+            for i, line in enumerate(e["lines"]):
+                parts = (deco if i == 0 else []) + [{"s": line, "x": 0, "y": ring(vy), "scale": e["sc"], "color": col}]
+                top_y = vy - (e["gap"] if i == 0 and not e.get("split") else 0)
+                rows[(m["id"], i)] = (vy, parts, sig_of(parts), top_y, vy + gh, vy + lh)
                 vy += lh
         return rows
 
@@ -992,82 +1124,87 @@ class KdChat:
         d = self.d
         if self._full:
             self._full = False
-            self._phase2 = None
             self._single_sig = None
             d.clear_text()
             self._base()
-            K = self.K
-            self.slots, self.slot_sig, self.slot_parts = [None] * K, [None] * K, [[] for _ in range(K)]
-            self.slot_wparts = [{} for _ in range(K)]
             msgs = self._all()
-            rows = self._rows(msgs)
-            T = msgs[-1]["vy0"] + msgs[-1]["h"] if msgs else 0
-            self.S = max(0, T - self.band)
-            self._assign(rows, self.S)
+            for k, log in enumerate(self.logs):
+                n = self.K_of(k) if self.log_on(k) else 0
+                log.phase2 = None
+                log.slots, log.sig, log.parts = [None] * n, [None] * n, [[] for _ in range(n)]
+                if k:
+                    for i in range(n, 16):
+                        d.remove(f"w{k}s{i}")
+                if not n:
+                    log.S = 0
+                    continue
+                log.S = max(0, self._T(k, msgs) - self.band)
+                self._assign(k, self._rows(k, msgs), log.S)
             self._present_log()
             return
         if self._busy():
             return                                            # one step at a time: wait until the last one is out
-        if self._phase2 is not None:
-            self.S, self._phase2 = self._phase2, None
-            self._present_log()
-            return
         msgs = self._all()
-        rows = self._rows(msgs)
-        T = msgs[-1]["vy0"] + msgs[-1]["h"] if msgs else 0
-        St = max(0, T - self.band)
-        if St > self.S:
-            # reveal the next line (with the gap above it): write it below the band, then scroll
-            nxt = min((r[0] + self.lh for r in rows.values() if r[0] + self.lh > self.S + self.band), default=T)
-            Sn = min(St, max(self.S + 1, nxt - self.band))
-            self._assign(rows, Sn, hidden_at=self.S)
-            self._phase2 = Sn
-            self._present_log()
-        elif St < self.S:
-            # the log got shorter (a live message lost a line): blank what leaves, scroll; the top fills next step
-            self._assign(rows, St, write=False)
-            self.S = St
-            self._present_log()
-        elif self._assign(rows, self.S):
+        changed = False
+        for k, log in enumerate(self.logs):                   # every screen scrolls on its own
+            if not self.log_on(k):
+                continue
+            if log.phase2 is not None:
+                log.S, log.phase2 = log.phase2, None
+                changed = True
+                continue
+            rows = self._rows(k, msgs)
+            T = self._T(k, msgs)
+            St = max(0, T - self.band)
+            if St > log.S:
+                # reveal the next line (with the gap above it): write it below the band first, then scroll
+                nxt = min((r[5] for r in rows.values() if r[5] > log.S + self.band), default=T)
+                Sn = min(St, max(log.S + 1, nxt - self.band))
+                self._assign(k, rows, Sn, hidden_at=log.S)
+                log.phase2 = Sn
+                changed = True
+            elif St < log.S:
+                # the log got shorter (a live message lost a line): blank what leaves, scroll; the top fills next step
+                self._assign(k, rows, St, write=False)
+                log.S = St
+                changed = True
+            elif self._assign(k, rows, log.S):
+                changed = True
+        if changed:
             self._present_log()
 
     def _visible(self, row, S):
         """does a line (its ink, or the label / divider in the gap above it) show in the band at scroll S?"""
-        return row[0] + self.gh > S and row[3] < S + self.band
+        return row[4] > S and row[3] < S + self.band
 
-    def _assign(self, rows, S, write=True, hidden_at=None):
-        """bring the slots to the lines visible at scroll S: free the slots of lines not visible there, draw new /
+    def _assign(self, k, rows, S, write=True, hidden_at=None):
+        """bring log k's slots to the lines visible at scroll S: free the slots of lines not visible there, draw new /
         changed lines (hidden_at: new lines only if they are still below the band at that scroll). -> changed?"""
-        want = {k for k, r in rows.items() if self._visible(r, S)}
+        log = self.logs[k]
+        want = {key for key, r in rows.items() if self._visible(r, S)}
         changed = False
-        for i, key in enumerate(self.slots):
+        for i, key in enumerate(log.slots):
             if key is not None and key not in want:
-                self.slots[i] = None; self.slot_sig[i] = None; self.slot_parts[i] = []; self.slot_wparts[i] = {}
+                log.slots[i] = None; log.sig[i] = None; log.parts[i] = []
                 changed = True
         if write:
-            for key in sorted(want, key=lambda k: rows[k][0]):
-                vy, parts, sig, top_y, wparts = rows[key]
-                if key in self.slots:
-                    i = self.slots.index(key)
+            for key in sorted(want, key=lambda q: rows[q][0]):
+                vy, parts, sig, top_y = rows[key][:4]
+                if key in log.slots:
+                    i = log.slots.index(key)
                 elif hidden_at is not None and top_y < hidden_at + self.band:
                     continue                                  # would show before the scroll: next step
-                elif None in self.slots:
-                    i = self.slots.index(None)
+                elif None in log.slots:
+                    i = log.slots.index(None)
                 else:
                     continue
-                if self.slot_sig[i] != sig:
-                    self.slots[i], self.slot_sig[i], self.slot_parts[i] = key, sig, parts
-                    self.slot_wparts[i] = wparts
+                if log.sig[i] != sig:
+                    log.slots[i], log.sig[i], log.parts[i] = key, sig, parts
                     changed = True
-        mirror = self.mirror()
-        for i in range(len(self.slots)):
-            self.d.compose(self.slot_parts[i], id=f"s{i}", move=True, page=True, pages=self.slot_pages)
-            for side, name in ((1, "left"), (2, "right")):
-                if mirror and self.wing_lang[side - 1]:
-                    w = self.slot_wparts[i].get(side, []) if self.slots[i] is not None else []
-                    self.d.compose(w, id=f"w{side}s{i}", move=True, page=True, pages=self.slot_pages, screen=name)
-                else:
-                    self.d.remove(f"w{side}s{i}")
+        name = ("main", "left", "right")[k]
+        for i in range(len(log.slots)):
+            self.d.compose(log.parts[i], id=f"s{i}" if k == 0 else f"w{k}s{i}", move=True, page=True,
+                           pages=self.pages_of(k), **({} if k == 0 else {"screen": name}))
         return changed
 
     def _busy(self):
@@ -1076,51 +1213,66 @@ class KdChat:
         return any(p in pend for p in self._wait)
 
     def _log_shapes(self):
-        """dividers between messages + the draft's caret as hardware shapes. They scroll with the log through the shape
-        layer's offset (shape_y = -S, written in the same register page as text_y: same frame as the text): a shape
-        sits at (top + its log y) mod H. One that would leave the band at this scroll or the next one (a reveal's second
-        phase) is hidden now, so it never wraps round into view."""
+        """dividers between messages, the rules left of the time labels and the draft's caret as hardware shapes. They
+        scroll with their log through the shape offset (main: shape_y = -S; a side screen: its wing_shape_y; written in
+        the same register page as the text offsets: same frame as the text): a shape sits at (top + its log y) mod H.
+        One that would leave the band at this scroll or the next one (a reveal's second phase) is hidden now, so it
+        never wraps round into view."""
         d, s, c = self.d, self.s, self.d.cfg
-        S, top, H = self.S, self.top, c.H
-        S2 = self._phase2 if self._phase2 is not None else S
-        free = list(range(SHP_LOG0, SHP_WING))
-        want = []
+        top, H = self.top, c.H
+        msgs = self._all()
+        wsy = [0, 0]
+        for k in (0, 1, 2):
+            free = list(range(SHP_LOG0, SHP_WING) if k == 0 else SHP_WLOG[k])
+            log = self.logs[k]
+            S = log.S
+            S2 = log.phase2 if log.phase2 is not None else S
+            want = []
 
-        def inside(y0, y1):                                       # log rows y0..y1 visible at both scrolls
-            return all(top <= top + y0 - v and top + y1 - v < H for v in (S, S2))
-        if self.image is None:
-            msgs = self._all()
-            for m in msgs:
-                labelled = s["show_time"] or (m.get("edited") and not m.get("reverted"))
-                if s["divider"] and m.get("gap") and not labelled:
-                    y = m["vy0"] + (m["gap"] - 2) // 2
-                    if inside(y, y):
-                        w = 39
-                        want.append(("div", (c.W - w) // 2, y, w))
-            m = msgs[-1] if msgs else None
-            if m is not None and m.get("draft") and m.get("lines"):
-                k = len(m["lines"]) - 1
-                y = m["vy0"] + m["gap"] + k * self.lh
-                gh = c.glyph_h(m.get("sc", s["scale"]))
-                w, _ = d.measure(m["lines"][k] or " ", c.W, m.get("sc", s["scale"]))
-                x = min(c.W - 2, (w + 1) if m["lines"][k] else 0)
-                if inside(y, y + gh - 1):
-                    want.append(("caret", x, y, gh))
-        for kind, x, y, v in want[-len(free):]:
-            i = free.pop(0)
-            Y = (top + y) % H
-            if kind == "div":
-                d.shapes.line(i, x, Y, x + v - 1, Y, color=DIVIDER)
-            else:
-                d.shapes.rect(i, x, Y, 2, v, color=s["meta"], fill=s["meta"], width=0, anim=("blink", 2))
-        for i in free:
-            d.shapes.hide(i)
-        d.set(shape_y=(-S) % H, shape_x=0, shape_vx=0, shape_vy=0)
+            def inside(y0, y1):                                   # log rows y0..y1 visible at both scrolls
+                return all(top <= top + y0 - v and top + y1 - v < H for v in (S, S2))
+            if self.image is None and self.log_on(k):
+                cols = self._colors(k, msgs)
+                for m, e in self._entries(k, msgs):
+                    if not e["gap"]:
+                        continue
+                    deco = e.get("deco") or []
+                    if deco:                                      # a rule from the left edge to just before the label
+                        y, x1 = e["vy0"] + 3, deco[0]["x"] - 5
+                        if x1 > 8 and inside(y, y):
+                            want.append(("rule", 2, y, x1 - 2 + 1, cols[m["id"]]))
+                    elif k == 0 and s["divider"]:
+                        y = e["vy0"] + (e["gap"] - 2) // 2
+                        if inside(y, y):
+                            want.append(("div", (c.W - 39) // 2, y, 39, DIVIDER))
+                m = msgs[-1] if msgs and k == 0 else None
+                if m is not None and m.get("draft") and m.get("lines"):
+                    n = len(m["lines"]) - 1
+                    y = m["vy0"] + m["gap"] + n * c.line_h(m["sc"])
+                    gh = c.glyph_h(m["sc"])
+                    w, _ = d.measure(m["lines"][n] or " ", c.W, m["sc"])
+                    x = min(c.W - 2, (w + 1) if m["lines"][n] else 0)
+                    if inside(y, y + gh - 1):
+                        want.append(("caret", x, y, gh, s["meta"]))
+            name = ("main", "left", "right")[k]
+            for kind, x, y, v, col in want[-len(free):]:
+                i = free.pop(0)
+                Y = (top + y) % H
+                if kind == "caret":
+                    d.shapes.rect(i, x, Y, 2, v, color=col, fill=col, width=0, anim=("blink", 2))
+                else:
+                    d.shapes.line(i, x, Y, x + v - 1, Y, color=col, screen=name)
+            for i in free:
+                d.shapes.hide(i)
+            if k:
+                wsy[k - 1] = (-S) % H
+        d.set(shape_y=(-self.logs[0].S) % H, shape_x=0, shape_vx=0, shape_vy=0, wing_shape_y=tuple(wsy))
 
     def _present_log(self):
         d = self.d
         clip = (self.top, d.cfg.H) if self.image is None else (1, 1)
-        d.set(text_y=(-self.S) % RING, text_wrap=(0, RING), text_clip=clip)
+        wy = tuple((-self.logs[k].S) % RING if self.wlog_on(k) else None for k in (1, 2))
+        d.set(text_y=(-self.logs[0].S) % RING, text_wrap=(0, RING), text_clip=clip, wing_text_y=wy)
         self._log_shapes()
         P = d.cfg.P
         before = bytes(d.link.want)
@@ -1147,7 +1299,7 @@ class KdChat:
         self._base()
         top = self.top
         d.set(text_y=0, text_wrap=None, text_clip=None, shape_y=0)
-        for i in range(SHP_LOG0, c.shp_n):
+        for i in [*range(SHP_LOG0, SHP_WING), *SHP_WLOG[1], *SHP_WLOG[2]]:   # (not the side screens' headers)
             d.shapes.hide(i)
         if m is not None and self.image is None:
             col = s["meta"] if m.get("draft") else s["color"]          # (the highlight marks the newest line of the log)

@@ -78,7 +78,7 @@ Without VRChat: `Display(dry=True)` and `d.preview("out.png")` render the memory
 | Layer | Resolution | Coordinates | Content |
 |---|---|---|---|
 | Graphics `d.gfx` | the screen size (176 × 96 at the default size) | canvas | pixel art, pictures, photos |
-| Shapes `d.shapes` | vector, drawn per pixel | screen | 16 hardware lines / rectangles / circles / arcs / polygons / curves |
+| Shapes `d.shapes` | vector, drawn per pixel | screen | 24 hardware lines / rectangles / circles / arcs / polygons / curves |
 | Sprites | 4, each 16 × 16 | screen, may be partly off-screen | small images over the graphics, below or above the text |
 | Text | the screen size | screen | any number of runs (up to the limits), each with its own position, colour, size |
 
@@ -118,7 +118,7 @@ least error and maps the other pixels to the nearest of them. Shapes and sprites
 
 ### Memory, pages and sending
 
-- The memory is 7,150 bytes in 239 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
+- The memory is 7,230 bytes in 241 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
   bytes (`KD_B0..KD_B29`), 248 bits of synced parameters. Default rate 3 frames per second.
 - `present()` only encodes. Frames go out from `tick()` or `run()`.
 - Only changed pages are sent. A full screen takes a few dozen frames; changing one line of text usually 1 or 2.
@@ -178,7 +178,7 @@ takes `screen=` too.
 | `x`, `y` | top-left corner in screen pixels, any position (off-screen too with `clip=False`, e.g. long marquee lines) |
 | `width` | layout width, default up to the right edge; longer lines wrap (`wrap=True`) |
 | `align` | `left` / `center` / `right` within `width` |
-| `scale` | `1`, `2`, `"small"` (5×7 ASCII, 6×9 px per character, 21 per line) or `"tiny"` (3×5 ASCII, 4×6 px, 32 per line). Standard: latin 7 px, CJK 13 px wide (6 / 12 + 1 px spacing; 13 hanzi per line), glyph height 12, line height 14; doubled at `2`. Small fonts are ASCII only; `"small"` has no background box |
+| `scale` | `1`, `2`, `"small"` (5×7 ASCII + 33 common accented letters, other marks dropped; 6×9 px per character, 21 per line) or `"tiny"` (3×5 ASCII, 4×6 px, 32 per line). Standard: latin 7 px, CJK 13 px wide (6 / 12 + 1 px spacing; 13 hanzi per line), glyph height 12, line height 14; doubled at `2`. Small fonts are ASCII only; `"small"` has no background box |
 | `color`, `bg` | foreground and background (palette index; background 0..3 only) |
 | `box` | draw the background box |
 | `invert` | swap foreground and background and draw the box |
@@ -225,7 +225,7 @@ never decode old data in the new mode.
 
 ### Shapes (hardware drawing)
 
-16 shapes drawn by the shader every frame from a formula (`d.shapes`). Each shape is 10 bytes of memory (3 per page),
+24 shapes drawn by the shader every frame from a formula (`d.shapes`). Each shape is 10 bytes of memory (3 per page),
 so **moving, recolouring or resizing a shape costs 1 frame**: no bitmap is redrawn and the 4-colours-per-tile limit does
 not apply. Shapes are kept by number: calling again with the same `i` changes that shape. Coordinates are screen pixels
 (-32..223, may be partly off-screen); angles in degrees, 0 = 12 o'clock, clockwise.
@@ -294,14 +294,17 @@ d.sprite(i, x=None, y=None, pattern=None, colors=None, visible=None,
 | `text_wrap` | `(w, h)` or `None` | state | wrap period of moving text (w in 8 px, h in 2 px steps, max 2040 / 510); `None` = screen size |
 | `text_clip` | `(y0, y1)` or `None` | state | moving text only shows in these rows (pixel-exact); `y0 == y1` hides it |
 | `size_m` | 0.20 .. 0.60 | state | width of the screen in metres (for a 128 px wide screen) |
-| `wings` | bool | state | unfold the two side screens (see below) |
+| `wings` | bool, `"left"`, `"right"` | state | unfold both side screens, or only one (see below) |
+| `wing_text_y` | `(left, right)` | state | a side screen's own vertical offset for its moving text (`None`: it moves with `text_y`) |
+| `wing_shape_y` | `(left, right)` | state | a side screen's shape offset (like `shape_y`; its `follow=True` shapes stay put) |
 | `wing_pages` | `(left, right)` | state | text pages of the side screens' regions (default from `config.json`, 4 + 4) |
 
 ### Side screens (wings)
 
 Two more screens of the main screen's size, folded behind it like a satellite's solar arrays. `d.set(wings=True)`
 unfolds them (about 1.4 s: the inner panel swings out around its hinge, the outer one unfolds, then the screens power
-on); `wings=False` folds them. At the left / right positions the avatar moves the display outward while they open, so
+on); `wings=False` folds them, `wings="left"` / `"right"` unfolds only that one (the other folds). With one side screen
+open the device turns around the seam between it and the main screen. At the left / right positions the avatar moves the display outward while they open, so
 they never reach into it. They have no title bar and no status bar.
 
 Everything that can go on the main screen can go on a side screen, in the side screen's own coordinates (0..W,
@@ -324,7 +327,8 @@ with the device, and they only change when the split changes) say which part of 
   the main screen's text before them. The main screen has that much less text memory while a side screen has text.
   Moving side-screen text (`move=True`) moves with the main screen's text registers (`text_x/y`, speeds, `text_wrap`,
   `text_clip`): a side screen's still items fill the first pages of its region, its moving ones start on the next page
-  (register `wing_mv`). Three chat logs scroll in step with one register write.
+  (register `wing_mv`). Three chat logs scroll in step with one register write, or each on its own with
+  `wing_text_y` (registers `wing_ly` / `wing_ry`).
 - **Shapes:** the driver stores the main screen's shapes first, then the left's, then the right's (it renumbers the
   slots in memory; you keep using your own slot numbers).
 - **Sprites:** 2 bits per sprite.
@@ -550,9 +554,9 @@ writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id ch
 | `tilecol` | 4480 | 560 | the 4 palette indices of every 8×8 tile |
 | `palette` | 5040 | 32 | 16 colours, RGB565 |
 | `text` | 5100 | 1530 | the run chain (headers + 7 / 12 / 14-bit glyph codes) |
-| `regs` | 6630 | 48 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show` (bit 0 shown, bit 1 side screens open), `size`, shape offsets, side-screen routes `wing_tl` / `wing_tr` (first text page of each region), `wing_gl` / `wing_gr` (first tile of each picture), `wing_shp` (first shape slot left << 4 \| right), `wing_spr` (2 bits per sprite), `wing_mv` (first moving page of each wing's region, left << 4 \| right) |
+| `regs` | 6630 | 52 | screen registers: `flags`, `gfx_mode`, offsets, speeds, `fx`, `cycle`, `timing`, `blink_view`, window, checksums, text wrap / clip, `screen`, `show` (bit 0 shown, bit 1 left side screen open, bit 2 right), `size`, shape offsets, side-screen routes `wing_tl` / `wing_tr` (first text page of each region), `wing_gl` / `wing_gr` (first tile of each picture), `wing_shp` (first shape slot left << 4 \| right), `wing_spr` (2 bits per sprite), `wing_mv` (first moving page of each wing's region, left << 4 \| right), `wing_ly` / `wing_ry` (a wing's own text offset + 1, 0 = follows `text_y`), `wing_lsy` / `wing_rsy` (a wing's shape offset) |
 | `sprites` | 6690 | 276 | 4 sprites: registers, colours, 16×16 2-bit patterns |
-| `shapes` | 6990 | 160 | 16 shapes × 10 bytes |
+| `shapes` | 6990 | 240 | 24 shapes × 10 bytes |
 
 Glyph codes: ASCII 7 bits, the common page (kana + 3,755 hanzi) 12 bits, everything else 14 bits; a stretch that mixes
 common and extended full-width glyphs is written in the extended mode alone when that is shorter (Japanese).

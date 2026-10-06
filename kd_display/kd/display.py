@@ -27,8 +27,26 @@ def screen_id(screen):
     return SCREENS[screen]
 
 
+def wing_sides(v):
+    """the wings setting -> frozenset of open sides (1 left, 2 right): True / False, "left" / "right" / "both", or a
+    collection of those (or of 1 / 2)"""
+    if v is True or v == "both":
+        return frozenset((1, 2))
+    if not v:
+        return frozenset()
+    if isinstance(v, (str, int)):
+        v = [v]
+    out = set()
+    for x in v:
+        k = {"left": 1, "right": 2, 1: 1, 2: 2}.get(x)
+        if k is None:
+            raise ValueError(f"wings: {x!r} (left / right)")
+        out.add(k)
+    return frozenset(out)
+
+
 class ShapeLayer:
-    """16 hardware shapes, drawn by the shader from a 10-byte table entry each (kd/shapes.py): moving / recolouring a
+    """24 hardware shapes (config shapes.count), drawn by the shader from a 10-byte table entry each (kd/shapes.py): moving / recolouring a
     shape = one frame, no bitmap. Slots are retained: calling a method on slot i again replaces it. Angles in degrees
     (0 = 12 o'clock, clockwise), positions in screen px. Common options:
         pattern  "solid" | "checker" | "hstripes" | "vstripes" | "diagonal" | "dots" | "hgradient" | "vgradient"
@@ -119,6 +137,8 @@ class ShapeLayer:
         for k in (1, 2):
             starts.append(len(order) if groups[k] else 0)
             order += groups[k]
+        if max(starts) > 15:
+            raise ValueError("too many main / left-wing shapes (a wing's range must start at slot 15 or before)")
         if len(order) > self.cfg.shp_n:
             raise ValueError("too many shapes (an empty slot 0 is needed when only wings have shapes)")
         data = [self.data[i] if i is not None else None for i in order] + [None] * (self.cfg.shp_n - len(order))
@@ -149,7 +169,7 @@ class Display:
         self._next = 1
         self.photo_gray = None
         c = self.cfg.raw["color"]
-        self.state = dict(on=True, wings=False, wing_pages=None, invert=False, gfx=True, text=True, mono=False, mono_fg=c["mono_fg"], mono_bg=c["mono_bg"],
+        self.state = dict(on=True, wings=frozenset(), wing_text_y=(None, None), wing_shape_y=(0, 0), wing_pages=None, invert=False, gfx=True, text=True, mono=False, mono_fg=c["mono_fg"], mono_bg=c["mono_bg"],
                           dither=False, sprites=True, window=None, gfx_x=0, gfx_y=0, text_x=0, text_y=0,
                           gfx_vx=0, gfx_vy=0, text_vx=0, text_vy=0, zoom=1, mirror_x=False, mirror_y=False,
                           cycle=None, blink=None, text_wrap=None, text_clip=None, size_m=self.cfg.size_m,
@@ -210,7 +230,7 @@ class Display:
         order with any other page item's pages, so a changed line never blanks or moves other text (a chat line).
         pages: a fixed number of pages for it (it is cut to fit; it never moves the items after it).
         screen: "main", or "left" / "right" = a side screen (in its own coordinates; shows while the wings are open,
-        d.set(wings=True)). Wing text goes into its wing's region of the text area (config wings.text_pages,
+        d.set(wings=True), or only that one: wings="left" / "right"). Wing text goes into its wing's region of the text area (config wings.text_pages,
         d.set(wing_pages=...)); moving wing text moves with the main screen's text registers (three logs in step)."""
         sid = screen_id(screen)
         if scale not in (1, 2, "small", "tiny"):
@@ -337,6 +357,9 @@ class Display:
         blink (colour, hz) or None: that palette colour blinks to colour 0 (hz in 0.5 steps, up to 7.5)
         size_m: the device's width in metres (a 128 px wide screen; menu size_min .. size_max, register size)
         shape_x, shape_y, shape_vx, shape_vy: the shape layer's offset / auto-scroll (like the text layer)
+        wings: True / False / "left" / "right" (the side screens that unfold); wing_text_y (left, right): a side
+        screen's own vertical offset for its moving text (None: it moves with text_y / text_vy); wing_shape_y (left, right):
+        the offset of a side screen's shapes (like shape_y; its follow=True shapes stay put)
         legacy: scroll = graphics rows of 8 graphics px up, text_dy = text_y"""
         for k, v in kw.items():
             if k == "scroll":
@@ -348,6 +371,11 @@ class Display:
                 assert v in (1, 2, 4), v
             if k == "size_m":
                 v = min(self.cfg.size_max, max(self.cfg.size_min, float(v)))
+            if k == "wings":
+                v = wing_sides(v)
+            if k == "wing_text_y":
+                v = tuple(None if x is None else int(round(x)) for x in v)
+                assert len(v) == 2, "wing_text_y: (left, right), None = with text_y"
             if k == "text_wrap" and v is not None:
                 wx, wy = v
                 assert 0 <= wx <= 2040 and wx % 8 == 0 and 0 <= wy <= 510 and wy % 2 == 0, "text_wrap: x in 8 px, y in 2 px steps"
@@ -498,7 +526,8 @@ class Display:
             m.reg("screen", self.cfg.screen_reg())
         if "show" in self.cfg.regs:
             # the device's appear / leave (FX layer KD Show) | 2: the side screens unfold (FX layer KD Wings)
-            m.reg("show", (1 | (2 if st["wings"] and wings_cfg else 0)) if st["on"] else 0)
+            # bits 1 / 2: the left / right side screen unfolds (FX layers KD Wing L / KD Wing R), each on its own
+            m.reg("show", (1 | (sum(2 << (k - 1) for k in st["wings"]) if wings_cfg else 0)) if st["on"] else 0)
         if "size" in self.cfg.regs:                         # 1..255 = size_min..size_max (0 = not set: the default)
             c = self.cfg
             m.reg("size", 1 + round((st["size_m"] - c.size_min) / (c.size_max - c.size_min) * 254))
@@ -515,6 +544,12 @@ class Display:
         m.reg("mono", ((st["mono_fg"] & 15) << 4) | (st["mono_bg"] & 15))
         for k in ("gfx_x", "gfx_y", "text_x", "text_y"):
             m.reg(k, st[k] % 256)
+        if "wing_ly" in self.cfg.regs:                      # a wing's own scroll (0: it follows text_y)
+            for k, v in zip(("wing_ly", "wing_ry"), st["wing_text_y"]):
+                m.reg(k, 0 if v is None else 1 + int(v) % 255)
+        if "wing_lsy" in self.cfg.regs:                     # a wing's shape offset (its FOLLOW shapes stay put)
+            for k, v in zip(("wing_lsy", "wing_rsy"), st["wing_shape_y"]):
+                m.reg(k, int(v or 0) % self.cfg.H)
         for k in ("gfx_vx", "gfx_vy", "text_vx", "text_vy"):
             m.reg(k, max(-128, min(127, int(st[k]))) & 0xFF)
         if self.cfg.shp_n:

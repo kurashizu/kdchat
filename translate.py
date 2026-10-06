@@ -43,6 +43,11 @@ LANGUAGES = {
     "hr": ("Croatian", "Hrvatski"), "sr": ("Serbian", "Српски"), "hbs": ("Serbo-Croatian", "Srpskohrvatski"),
 }
 
+# written in the Latin alphabet: these can use the display's small font (5x7: ASCII + the common accented letters;
+# other marks are dropped). Not Vietnamese: its tone marks carry the meaning.
+LATIN = frozenset("en es fr de it pt pl nl sv nb no da fi cs sk sl hu ro lt lv et is ca gl eu tr az id ms af sq bs hr "
+                  "hbs".split())
+
 _ALIGN = {"model": 256, "lex": 64, "vocab": 64, "srcvocab": 64, "trgvocab": 64}
 
 

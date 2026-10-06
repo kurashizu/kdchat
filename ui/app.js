@@ -794,6 +794,20 @@ function paintTr() {
   const kd = el("button", "pill" + (s.kd ? " on" : "")); kd.type = "button"; kd.setAttribute("aria-pressed", !!s.kd);
   kd.appendChild(el("i", "dot")); kd.appendChild(el("span", null, t("tr.kd"))); kd.onclick = () => setTr({ kd: !s.kd });
   box.appendChild(optRow("", kd));
+  // small font (5x7) per Latin-script language: the target / typing languages and any already chosen
+  const okSmall = new Set(d.small_ok || []), small = new Set(s.small || []);
+  const cand = [...new Set([...s.targets, s.source === "auto" ? s.latin : s.source, "en", ...small])].filter((c) => okSmall.has(c));
+  if (cand.length) {
+    const wrap = el("div", "pills");
+    for (const c of cand) {
+      const l = langs.find((x) => x.code === c);
+      const b = el("button", "pill" + (small.has(c) ? " on" : "")); b.type = "button"; b.setAttribute("aria-pressed", small.has(c));
+      b.appendChild(el("i", "dot")); b.appendChild(el("span", null, l ? l.native : c));
+      b.onclick = () => { const n = new Set(small); n.has(c) ? n.delete(c) : n.add(c); setTr({ small: [...n] }); };
+      wrap.appendChild(b);
+    }
+    const r = optRow(t("tr.small"), wrap); r.title = t("tr.smallHint"); box.appendChild(r);
+  }
   // the language list: the selected / downloaded ones first
   const m = $("trModels"); m.innerHTML = "";
   const want = new Set([s.source, s.latin, ...s.targets]);

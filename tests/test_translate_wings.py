@@ -34,7 +34,8 @@ def test_tidy_full_width():
 
 def _wing_regs(d):
     c = d.cfg
-    return {n: d.mem.buf[c.regs[n]] for n in ("show", "wing_tl", "wing_tr", "wing_gl", "wing_gr", "wing_shp", "wing_spr")}
+    return {n: d.mem.buf[c.regs[n]] for n in ("show", "wing_tl", "wing_tr", "wing_gl", "wing_gr", "wing_shp", "wing_spr",
+                                              "wing_ly", "wing_ry", "wing_lsy", "wing_rsy")}
 
 
 def test_wing_text_regions_with_page_items():
@@ -51,7 +52,7 @@ def test_wing_text_regions_with_page_items():
     assert len(d.mem.buf) == before and r["dropped"] == 0
     regs = _wing_regs(d)
     total = d.cfg.text_bytes // d.cfg.P
-    assert regs["show"] == 3 and regs["wing_tl"] == total - 6 and regs["wing_tr"] == total - 3
+    assert regs["show"] == 7 and regs["wing_tl"] == total - 6 and regs["wing_tr"] == total - 3
     assert d.mem.buf[d.cfg.regs["size"]] != 0                  # a register written after the text, not shifted
     assert wings_open(d.mem)
     lit = lambda img: sum(1 for row in img for p in row if sum(p) > 1.5)
@@ -133,27 +134,91 @@ def test_language_list_offline(make_client):
     assert c.post("/api/v1/translate/models/xx").status_code == 404
 
 
-def test_mirrored_logs(make_client, monkeypatch):
-    """chat layout + translations: the side screens show the log translated, row by row in step with the main one"""
+def _mirror_client(make_client, monkeypatch, targets=("ja", "en"), small=("en",)):
     c = make_client()
     a = c.app_module
     monkeypatch.setattr(a, "_tr_engine", FakeEngine())
     c.put("/api/v1/outputs", json={"chatbox": False, "kd": True})
-    c.put("/api/v1/translate", json={"enabled": True, "targets": ["ja", "en"], "kd": True})
-    k = a._kd
-    assert k.mirror() and k.wing_lang == ["ja", "en"] and k.wing_label[0].startswith("JA  JAPANESE")
-    for t in ("你好", "今天天气不错"):
-        c.post("/api/v1/messages", json={"text": t})
+    c.put("/api/v1/translate", json={"enabled": True, "targets": list(targets), "kd": True, "small": list(small)})
+    return c, a, a._kd
+
+
+def _flush(k):
     with k.lock:                                                   # (ticks would first send the whole memory)
         k._full = True
         k._step()
+    for _ in range(400):                                           # every reveal step (pages out, then the scroll)
+        k.d.link.sent[:] = k.d.link.want
+        k.d.link.pending = lambda: []
+        with k.lock:
+            k._step()
+
+
+def test_mirrored_logs(make_client, monkeypatch):
+    """chat layout + translations: each side screen shows the log translated, scrolling on its own, every message with
+    its time label (and the rule left of it); English in the small font"""
+    c, a, k = _mirror_client(make_client, monkeypatch)
+    assert k.mirror() and k.wing_lang == ["ja", "en"] and k.wing_label[0].startswith("JA  JAPANESE")
+    for t in ("你好", "今天天气不错"):
+        c.post("/api/v1/messages", json={"text": t})
+    _flush(k)
     d = k.d
     regs = _wing_regs(d)
-    assert regs["show"] == 3 and regs["wing_tl"] and regs["wing_tr"]
+    assert regs["show"] == 7 and regs["wing_tl"] and regs["wing_tr"]
     assert d.mem.buf[d.cfg.regs["wing_mv"]] == 0x11               # each wing: header page, then the moving log
-    wing_items = [i for i in d.items if str(i).startswith("w1s") and d.items[i]]
-    assert wing_items, "no translated log lines on the left screen"
-    m = k.msgs[-1]
-    assert m["h"] >= m["gap"] + len(m["wl"][2]) * k.lh            # the row height covers the longest language
+    assert regs["wing_ly"] and regs["wing_ry"]                     # their own scroll registers
+    assert [i for i in d.items if str(i).startswith("w1s") and d.items[i]], "no translated lines on the left screen"
+    e = k.logs[2].lay[k.msgs[-1]["id"]]
+    assert e["sc"] == "small" and e["split"] and e["deco"][0]["s"].endswith(k.msgs[-1]["t"].strftime("%H:%M"))
+    assert k.logs[1].lay[k.msgs[-1]["id"]]["sc"] == 1
+    rules = [i for i in range(16, 24) if d.shapes.data[i] is not None and d.shapes.screen[i] == 2]
+    assert rules, "no rule beside the right screen's time labels"
     with pytest.raises(ValueError):
         k.show_image(b"x", "left")                                 # pictures: main screen only
+
+
+def test_independent_scroll(make_client, monkeypatch):
+    """a long translation scrolls its own screen only: the main log keeps its lines (no empty rows below them)"""
+    c, a, k = _mirror_client(make_client, monkeypatch, targets=("en",), small=())
+    a._tr_engine.translate = lambda text, s, t: "a much longer English translation " * 4
+    for t in ("你好", "早", "嗯"):
+        c.post("/api/v1/messages", json={"text": t})
+    _flush(k)
+    assert k.logs[0].S == 0                                         # three short lines: the main log does not scroll
+    assert k.logs[2].S > 0                                          # the English one does
+    assert k.wings_open() == {2}                                    # one language: only the right screen unfolds
+    assert k.d.mem.buf[k.d.cfg.regs["show"]] == 5
+
+
+def test_two_to_one_language(make_client, monkeypatch):
+    """two target languages -> one: the left screen folds, its text and log go; the right one shows the remaining one"""
+    c, a, k = _mirror_client(make_client, monkeypatch)
+    c.post("/api/v1/messages", json={"text": "你好"})
+    _flush(k)
+    assert k.wings_open() == {1, 2}
+    c.put("/api/v1/translate", json={"targets": ["ja"]})
+    _flush(k)
+    assert k.wing_lang == [None, "ja"] and k.wings_open() == {2}
+    assert not k.logs[1].lay and not [i for i in k.d.items if str(i).startswith("w1s") and k.d.items[i]]
+    assert k.d.mem.buf[k.d.cfg.regs["show"]] == 5 and k.d.mem.buf[k.d.cfg.regs["wing_tl"]] == 0
+    c.put("/api/v1/translate", json={"targets": []})
+    _flush(k)
+    assert not k.wings_open() and k.d.mem.buf[k.d.cfg.regs["show"]] == 1
+
+
+def test_single_layout_one_side(make_client, monkeypatch):
+    """single layout: the newest translation on the right screen only; a stale left text does not keep it open"""
+    c, a, k = _mirror_client(make_client, monkeypatch)
+    c.put("/api/v1/kd/settings", json={"layout": "single"})
+    c.post("/api/v1/messages", json={"text": "你好"})
+    assert k.wings_open() == {1, 2}
+    c.put("/api/v1/translate", json={"targets": ["en"]})
+    c.post("/api/v1/messages", json={"text": "再见"})
+    assert k.wings_open() == {2} and not (k.wing_text.get(1) or (None,))[0]
+
+
+def test_small_font_accents():
+    d = Display(dry=True)
+    lines = d.layout.lines("Größe déjà vu, Łódź ¿qué?", 176, "small")
+    text = "".join(ch[3] for ch in lines[0])
+    assert text == "Größe déjà vu, Lódz qué?" and not d.layout.missing

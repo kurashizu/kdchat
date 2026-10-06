@@ -1,6 +1,7 @@
 """Text layout -> runs. Any pixel position, wrapping (words for latin, per character for CJK, simple kinsoku),
 alignment, x2 scale, inverse video. A line is split into runs wherever the code page changes."""
 from .config import MODE_ASCII, MODE_TINY, MODE_SMALL, SMALL_FONTS
+from .tiny import SMALL_CODES, fold
 
 NO_START = set("，。、；：？！）」』】》〉…—～·,.;:?!)]}%")
 NO_END = set("（「『【《〈([{")
@@ -13,8 +14,14 @@ class Layout:
         self.clipped = 0                     # glyphs left out because they fall outside the screen
 
     def glyph(self, ch, scale=1):
-        if scale in SMALL_FONTS:                      # the small fonts: ASCII only
+        if scale in SMALL_FONTS:                      # the small fonts: ASCII (+ accented letters in "small"; fold())
+            from .tiny import small_code
             cp = ord(ch)
+            if scale == "small" and not 0x20 <= cp < 0x7F:
+                code = small_code(ch)
+                if SMALL_CODES[code] != ch:
+                    self.missing.add(ch)
+                return SMALL_FONTS[scale][0], code
             if not 0x20 <= cp < 0x7F:
                 self.missing.add(ch)
                 cp = ord("?")
@@ -42,6 +49,8 @@ class Layout:
         wrap = bool(wrap and max_w and max_w > 0)
         if wrap:
             max_w += self.slack(scale)
+        if scale in SMALL_FONTS:
+            text = fold(text, extra=scale == "small")    # accents the font lacks: dropped (é stays, ș -> s)
         for para in text.split("\n"):
             cells = [self.glyph(ch, scale) + (self.width(self.glyph(ch, scale)[0], scale), ch) for ch in para]
             LATIN = (MODE_ASCII, MODE_TINY, MODE_SMALL)

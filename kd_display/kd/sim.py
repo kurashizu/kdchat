@@ -155,10 +155,13 @@ def routes(buf, c):
     return text, shape, (lambda i: (spr >> (2 * i)) & 3), {1: R("wing_gl"), 2: R("wing_gr")}
 
 
-def wings_open(mem):
-    """does the register say the side screens are unfolded (show bit 1)?"""
+def wings_open(mem, side=None):
+    """does the register say a side screen is unfolded (show bit 1 left, bit 2 right; side None: either)?"""
     c = mem.cfg
-    return "show" in c.regs and bool(mem.buf[c.regs["show"]] & 2) and bool(mem.buf[c.regs["flags"]] & FLAG_ON)
+    if "show" not in c.regs or not mem.buf[c.regs["flags"]] & FLAG_ON:
+        return False
+    v = mem.buf[c.regs["show"]]
+    return bool(v & (6 if side is None else 2 << (side - 1)))
 
 
 def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
@@ -204,6 +207,8 @@ def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
                 shp.append((i, sh))
         sox = math.floor(R("shape_x") + s8(R("shape_vx")) * (t % W)) % W if "shape_x" in c.regs and not screen else 0
         soy = math.floor(R("shape_y") + s8(R("shape_vy")) * (t % H)) % H if "shape_y" in c.regs and not screen else 0
+        if screen and "wing_lsy" in c.regs:
+            soy = R("wing_lsy" if screen == 1 else "wing_rsy") % H
         gox = math.floor(R("gfx_x") + s8(R("gfx_vx")) * (t % W)) % W if not screen else 0
         goy = math.floor(R("gfx_y") + s8(R("gfx_vy")) * (t % H)) % H if not screen else 0
 
@@ -327,12 +332,15 @@ def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
             gh = 5 if tiny else 7 if small else c.cell * scale
             pgi = (off - tb) // c.P
             rs = route_text(pgi)
+            ddy = dy
             if rs == 0:
                 moving = mv == 0 or r + 1 >= mv
             else:                                           # a wing: its runs from page wing_mv on move (0 = none)
                 wmv = (R("wing_mv") >> (4 if rs == 1 else 0)) & 15 if "wing_mv" in c.regs else 0
                 start = R("wing_tl") if rs == 1 else R("wing_tr")
                 moving = wmv > 0 and pgi >= start + wmv
+            wy = R("wing_ly" if rs == 1 else "wing_ry") if rs and "wing_ly" in c.regs else 0
+            ddy = (wy - 1) % WY if wy else dy
             fgc, bgc = pal(fg), pal(bg)
             if not skip and rs == screen:
                 for i in range(n):
@@ -343,7 +351,7 @@ def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
                     ox, oy = rx + i * adv, ry
                     if moving:
                         ox = (ox + dx) % WX
-                        oy = (oy - cy0 + dy) % WY
+                        oy = (oy - cy0 + ddy) % WY
                         if wxr and ox > WX - adv:
                             ox -= WX
                         if wyr and oy > WY - gh:

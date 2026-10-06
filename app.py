@@ -551,7 +551,8 @@ def get_health() -> HealthResponse:
 
 # ---------------------------------------------------------------- translation (local, translate.py)
 
-_TR_DEFAULTS = {"enabled": False, "source": "auto", "latin": "en", "targets": [], "chatbox": 1, "kd": True}
+_TR_DEFAULTS = {"enabled": False, "source": "auto", "latin": "en", "targets": [], "chatbox": 1, "kd": True,
+                "small": ["en"]}   # small: languages in the display's small font (Latin-script ones: tr.LATIN)
 _tr_settings: dict = dict(_TR_DEFAULTS)
 _tr_models = tr.Models(cfg.data_dir())
 _tr_engine = tr.Engine(_tr_models)
@@ -579,6 +580,10 @@ def _tr_clean(body: dict, old: dict) -> dict:
             v = [x for i, x in enumerate(v or []) if x not in (v or [])[:i]]
             if len(v) > 2 or any(x not in tr.LANGUAGES for x in v):
                 raise ValueError("targets: at most 2 language codes")
+        elif k == "small":
+            v = sorted(set(v or []))
+            if any(x not in tr.LATIN for x in v):
+                raise ValueError("small: Latin-script language codes (the small font has no other letters)")
         s[k] = v
     return s
 
@@ -611,6 +616,7 @@ def _tr_apply() -> None:
     if _kd is not None:
         sides = _tr_sides()
         l, r = sides.get("left"), sides.get("right")
+        _kd.set_small_langs(_tr_settings["small"])
         _kd.set_wing_text_on(_tr_wings_on())
         _kd.set_wing_langs(l, r, (_tr_label(l) if l else None, _tr_label(r) if r else None))
     st = _tr_settings
@@ -662,14 +668,16 @@ def _chatbox_compose(text: str, trs: dict) -> str:
     return out
 
 
-def _kd_wings(trs: dict, kd_id: Optional[int] = None) -> None:
+def _kd_wings(trs: dict, kd_id: Optional[int] = None, src: Optional[str] = None) -> None:
     """a message's translations on the side screens: the chat layout shows them in the translated logs (in step with
     the main one), the single layout the newest one"""
     if _kd is None or not _tr_wings_on():
         return
     if kd_id is not None:
-        _kd.set_translations(kd_id, trs)
-    _kd.set_wing_text({side: ((trs[t], _tr_tag(t)) if t in trs else None) for side, t in _tr_sides().items()})
+        _kd.set_translations(kd_id, trs, src)
+    sides = _tr_sides()                                   # (a side screen without a language: nothing, it folds)
+    _kd.set_wing_text({side: ((trs[sides[side]], _tr_tag(sides[side])) if sides.get(side) in trs else None)
+                       for side in ("left", "right")})
 
 
 class _ChatboxThrottle:
@@ -736,7 +744,7 @@ def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
         _cb.send(_chatbox_compose(text, trs) if final else text, final, bool(req.sfx))   # (first: an OSC error must not leave a kd message)
     kd_id = _kd.new_message(text, final, bool(req.sfx)) if use["kd"] and _kd is not None else None
     if final and use["kd"]:
-        _kd_wings(trs, kd_id)
+        _kd_wings(trs, kd_id, src)
     targets = [k for k in ("chatbox", "kd") if use[k]]
     msg = MessageItem(output="+".join(targets), id=_next_message_id(), text=text, immediate=True, sfx=bool(req.sfx),
                       created_at=datetime.now(timezone.utc).isoformat(), length=len(text), kd_id=kd_id,
@@ -776,7 +784,7 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
         if use["kd"] and _kd is not None:
             _kd.update_message(msg.kd_id, text, final=True if done else None, sfx=done and msg.sfx)
             if done:
-                _kd_wings(trs, msg.kd_id)
+                _kd_wings(trs, msg.kd_id, src)
         if use["chatbox"] and latest_cb is msg:
             _cb.send(_chatbox_compose(text, trs) if done else text, done, done and msg.sfx)
         msg.text, msg.length = text, len(text)
@@ -796,9 +804,9 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
             newest_kd = next((m for m in reversed(_history) if m.kd_id is not None and m.final), None)
         if done:
             if newest_kd is msg:
-                _kd_wings(trs, msg.kd_id)
+                _kd_wings(trs, msg.kd_id, src)
             elif _tr_wings_on():
-                _kd.set_translations(msg.kd_id, trs)          # an older message: its rows in the translated logs
+                _kd.set_translations(msg.kd_id, trs, src)          # an older message: its rows in the translated logs
     if use["chatbox"] and latest_cb is msg:
         _cb.send(_chatbox_compose(text, trs) if done else text, done, False)   # the game only shows its newest message
     msg.text, msg.length, msg.edited = text, len(text), edited
@@ -1076,7 +1084,8 @@ def get_translate() -> dict:
     latin script and source is auto), targets (up to 2: shown with the original), chatbox (how many translations the
     game chatbox gets, 0-2), kd (on the Klaude display's side screens). languages: every language with its download
     state (ready / downloading / error / absent), size and progress. Models are downloaded on request only."""
-    return {"settings": _tr_settings, "languages": _tr_models.status(), "models": tr.MODELS_TAG}
+    return {"settings": _tr_settings, "languages": _tr_models.status(), "models": tr.MODELS_TAG,
+            "small_ok": sorted(tr.LATIN)}           # (the languages the small font can write)
 
 
 @api.put("/translate", tags=["translate"], summary="Change translation settings (partial update)")

@@ -38,6 +38,7 @@ a { color: var(--accent2); }
 .icon-btn:hover { background: var(--card2); color: var(--fg); }
 .icon-btn.sm { width: 32px; height: 32px; font-size: 14px; border-color: var(--line); border-radius: 9px; }
 /* on/off pill (live typing, display toggles) */
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pill { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 12px; border-radius: 17px; cursor: pointer;
         border: 1px solid var(--line); background: transparent; color: var(--dim); font-size: 13px; white-space: nowrap; }
 .pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

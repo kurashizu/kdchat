@@ -1,4 +1,4 @@
-"""Two small ASCII fonts. Rows top to bottom, '1' = ink.
+"""Two small fonts: ASCII (+ the common accented letters in the 5x7 one). Rows top to bottom, '1' = ink.
 TINY: 3x5 (4 x 6 px per character incl. spacing)  SMALL: 5x7 (6 x 9 px)"""
 TINY = {
     " ": "000 000 000 000 000", "!": "010 010 010 000 010", '"': "101 101 000 000 000", "#": "101 111 101 111 101",
@@ -89,6 +89,55 @@ SMALL = {
 assert len(SMALL) == 95
 
 
+# accented letters of the small font: codes 95..127 (the 7-bit code's free range), lowercase with the accent in the two
+# rows above the x-height; capitals with an accent get a 5-row body (the classic LCD shapes of Ä Ö Ü)
+_ACC = {"acute": "00010 00100", "grave": "01000 00100", "circ": "00100 01010", "uml": "01010 00000",
+        "tilde": "01101 10010", "ring": "01110 01010"}
+_BODY = {"a": "01110 00001 01111 10001 01111", "e": "01110 10001 11111 10000 01110", "i": "01100 00100 00100 00100 01110",
+         "o": "01110 10001 10001 10001 01110", "u": "10001 10001 10001 10011 01101", "n": "10110 11001 10001 10001 10001"}
+_LOWER = {"á": ("a", "acute"), "à": ("a", "grave"), "â": ("a", "circ"), "ä": ("a", "uml"), "ã": ("a", "tilde"),
+          "å": ("a", "ring"), "é": ("e", "acute"), "è": ("e", "grave"), "ê": ("e", "circ"), "ë": ("e", "uml"),
+          "í": ("i", "acute"), "ì": ("i", "grave"), "î": ("i", "circ"), "ï": ("i", "uml"), "ó": ("o", "acute"),
+          "ò": ("o", "grave"), "ô": ("o", "circ"), "ö": ("o", "uml"), "õ": ("o", "tilde"), "ú": ("u", "acute"),
+          "ù": ("u", "grave"), "û": ("u", "circ"), "ü": ("u", "uml"), "ñ": ("n", "tilde")}
+SMALL_EXTRA = {ch: _ACC[a] + " " + _BODY[b] for ch, (b, a) in _LOWER.items()}
+SMALL_EXTRA.update({
+    "ç": "00000 01110 10000 10000 10001 01110 00100", "ß": "01100 10010 10010 10110 10001 10001 10110",
+    "ø": "00000 00001 01110 10011 10101 11001 01110", "æ": "00000 00000 11010 00101 11111 10100 11011",
+    "œ": "00000 00000 11010 10101 10111 10100 11011", "Ä": "01010 00000 01110 10001 11111 10001 10001",
+    "Ö": "01010 00000 01110 10001 10001 10001 01110", "Ü": "01010 00000 10001 10001 10001 10001 01110",
+    "É": "00010 00100 11111 10000 11110 10000 11111",
+})
+assert len(SMALL_EXTRA) == 33
+# the small font's code order: ASCII 0x20..0x7E, then the accented letters
+SMALL_CODES = "".join(chr(0x20 + k) for k in range(95)) + "".join(SMALL_EXTRA)
+_SMALL_CODE = {ch: k for k, ch in enumerate(SMALL_CODES)}
+_FOLD = {"ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ı": "i", "Æ": "AE", "Ø": "O", "Œ": "OE", "ẞ": "SS", "þ": "th",
+         "Þ": "Th", "ð": "d", "Ð": "D", "¿": "", "¡": "", "«": '"', "»": '"', "„": '"', "“": '"', "”": '"', "‘": "'",
+         "’": "'", "‚": "'", "–": "-", "—": "-", "…": "...", "·": ".", "\u00a0": " ", "€": "EUR", "°": "o"}
+
+
+def fold(text, extra=True):
+    """text for the small fonts: the small font's accented letters stay (extra=True), every other letter loses its
+    marks (ł -> l, ș -> s, Æ -> AE); what has no ASCII form becomes '?'"""
+    import unicodedata
+    out = []
+    for ch in text:
+        if 0x20 <= ord(ch) < 0x7F or (extra and ch in SMALL_EXTRA) or ch == "\n":
+            out.append(ch)
+        elif ch in _FOLD:
+            out.append(_FOLD[ch])
+        else:
+            base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+            out.append(base if base and all(0x20 <= ord(c) < 0x7F for c in base) else "?")
+    return "".join(out)
+
+
+def small_code(ch):
+    """the small font's code of a character (fold() first), '?' when it has none"""
+    return _SMALL_CODE.get(ch, _SMALL_CODE["?"])
+
+
 def small_pixels(ch):
-    rows = SMALL.get(ch, SMALL["?"]).split()
+    rows = (SMALL_EXTRA.get(ch) or SMALL.get(ch, SMALL["?"])).split()
     return {(x, y) for y, r in enumerate(rows) for x, b in enumerate(r) if b == "1"}

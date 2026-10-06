@@ -62,9 +62,11 @@ affected).
 Settings → Translation (or `PUT /api/v1/translate`): `enabled`, `source` (`auto` or the language you type; with `auto`,
 `latin` = your language when you type Latin script), `targets` (up to 2), `chatbox` (how many translations the game
 chatbox gets: 0-2; the original always comes first, translations are shortened with … to fit 144 characters / 9 lines),
-`kd` (on the Klaude display's side screens: the first target on the left, the second on the right; one target: right;
-in the chat layout each side screen shows the whole log translated, in step with the main one; the single layout shows
-the newest translation).
+`kd` (on the Klaude display's side screens: the first target on the left, the second on the right; one target: only
+the right one unfolds; in the chat layout each side screen shows the whole log translated, each message with its time,
+every screen scrolling on its own; the single layout shows the newest translation), `small` (Latin-script languages
+written in the display's 5x7 font, main log and side screens; default `["en"]`; `GET` lists the allowed ones in
+`small_ok`).
 
 The engine is Mozilla's Firefox Translations (Bergamot, WebAssembly) running inside kdchat through an embedded V8
 (mini-racer), on the CPU of the machine that runs kdchat: a server deployment translates on the server. Models are

@@ -3,6 +3,27 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-10-07
+
+Three screens, each with its own scroll. **Needs the Klaude avatar of 2026-10-07 (1.6.0 menu icon) or later** (new
+display registers and 24 hardware shapes).
+
+### Changed
+- **Each screen scrolls on its own.** A translation that takes more lines than the original no longer pushes the main
+  log up (no more empty rows under the last message): the main screen and each side screen keep their own log and
+  scroll (registers `wing_ly` / `wing_ry` for the side screens' text, `wing_lsy` / `wing_rsy` for their shapes).
+- **The side screens unfold one by one.** One translation language: only the right screen unfolds, and the device turns
+  around the seam between the main screen and it. Going from two languages to one folds the left screen (its text is
+  cleared); register `show` bit 1 = left, bit 2 = right.
+- Every message on a side screen shows its time; a line in the message's colour runs from the left edge to the time
+  label (also on the main screen when "Show time" is on, and before "edited").
+
+### Added
+- **Small font per language** (Translation > Small font, default English): messages and translations in a chosen
+  Latin-script language use the display's 5x7 font, so more of a longer translation fits. The 5x7 font now has the
+  common accented letters (á à â ä ã å é è ê ë í ì î ï ó ò ô ö õ ú ù û ü ñ ç ß ø æ œ Ä Ö Ü É); other marks are left
+  out (ł -> l).
+
 ## [1.5.0] - 2026-10-07
 
 Three screens, one chat. **Needs the Klaude avatar of 2026-10-07 01:40 or later** (the display's text memory grew).

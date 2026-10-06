@@ -43,8 +43,9 @@ the console: your messages show up as a chat log on the display above your head,
 pictures you paste in. Everyone around you sees it, including people who join later. With any other avatar, leave 🖥
 off.
 
-Two **side screens** unfold from the display when translation is on: each shows the same chat in its language,
-scrolling in step with the main screen.
+**Side screens** unfold from the display when translation is on, one per translation language: each shows the chat
+in its language with every message's time, scrolling on its own. Latin-script languages can use the display's small
+font (default: English), so longer translations fit.
 
 ## Translation
 
