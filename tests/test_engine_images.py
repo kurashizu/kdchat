@@ -43,7 +43,7 @@ def test_engine_bad_model_is_an_error_not_a_crash(engine):
     ("你好。今天天气不错！要出去吗？", ["你好。", "今天天气不错！", "要出去吗？"]),
     ("3.14 is pi", ["3.14 is pi"]),
     ("trailing space. ", ["trailing space. "]),
-])
+], ids=["empty", "word", "three", "abbreviation", "cjk", "decimal", "trailing-space"])
 def test_sentences_cover_the_text(text, parts):
     got = BW._sentences(text)
     assert "".join(got) == text
@@ -56,7 +56,7 @@ def _raw(w, h, px=None):
 
 @pytest.mark.parametrize("data", [
     _raw(0, 5), _raw(5, 0), _raw(2000, 10), _raw(4, 4, b"\0" * 47), imgproc.MAGIC + b"\0", b"",
-])
+], ids=["no-width", "no-height", "too-wide", "short-body", "short-header", "empty"])
 def test_raw_pictures_are_checked(data):
     with pytest.raises(ValueError):
         imgproc.load(data)
