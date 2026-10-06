@@ -61,7 +61,7 @@ see [docs/KD_DRIVER.md](docs/KD_DRIVER.md) and `examples/hello_kd.py`.
 
 - [docs/ADVANCED.md](docs/ADVANCED.md): all settings, running on macOS / Linux or a server, the REST API, development.
 - [docs/KD_DRIVER.md](docs/KD_DRIVER.md): the Klaude display driver API, for your own programs.
-- [CHANGELOG.md](CHANGELOG.md): what changed. kdchat was called vrc-chatbox before 1.3.0; your settings carry over.
+- [CHANGELOG.md](CHANGELOG.md): what changed.
 
 ## License
 
