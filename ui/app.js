@@ -507,20 +507,28 @@ function paintKdStat() {
   st.appendChild(document.createTextNode(" · " + parts.join(" · ")));
 }
 
+// the preview's box follows the picture's own size (main screen + the open side screens), never stretched
+function setPrevDims(w, h) {
+  S.dims = [w, h];
+  const img = $("prev"), k = Math.min(352 * Math.max(1, Math.round(w / 182)) / w, 240 / h);
+  img.style.width = Math.round(w * k) + "px"; img.style.height = "auto";
+  img.style.aspectRatio = `${w} / ${h}`;
+  img.closest(".device").classList.toggle("wide", w > h * 2.5);
+}
+$("prev").addEventListener("load", () => {
+  const img = $("prev"), w = img.naturalWidth / 2, h = img.naturalHeight / 2;   // (rendered at 2x)
+  if (w && h && (!S.dims || S.dims[0] !== w || S.dims[1] !== h)) setPrevDims(w, h);
+});
+
 async function refreshKd(force) {
   if (!S.out.kd || (document.hidden && !force)) return;
   try {
     const s = await api("/kd/status");
     S.kdStat = s;
     if (!S.palette.length && s.palette) { S.palette = s.palette; if (S.kd) renderSettings(); }
-    const pw = s.wings ? 3 * s.width + 12 : s.width;              // open side screens: the preview shows all three
-    if (s.width && (!S.dims || S.dims[0] !== pw || S.dims[1] !== s.height)) {
-      S.dims = [pw, s.height];
-      const k = Math.min((s.wings ? 1056 : 352) / pw, 240 / s.height);
-      $("prev").style.width = Math.round(pw * k) + "px"; $("prev").style.height = Math.round(s.height * k) + "px";
-      $("prev").style.aspectRatio = `${pw} / ${s.height}`;
-      $("prev").closest(".device").classList.toggle("wide", !!s.wings);
-    }
+    const nw = Array.isArray(s.wings) ? s.wings.length : (s.wings ? 2 : 0);   // open side screens (0, 1 or 2)
+    const pw = s.width * (1 + nw) + 6 * nw;                        // the preview shows the open ones beside the main one
+    if (s.width && (!S.dims || S.dims[0] !== pw || S.dims[1] !== s.height)) setPrevDims(pw, s.height);
     $("led").className = s.synced ? "ok" : "";
     paintKdStat();
     $("closeImg").hidden = !(s.images || []).length && !s.image;

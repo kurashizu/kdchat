@@ -379,4 +379,5 @@ body.sheet-open { overflow: hidden; }
 .tr-row .bar { width: 90px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .tr-row .bar i { display: block; height: 100%; background: var(--accent); }
 /* the side screens: a wider preview; where the next picture goes */
-.device.wide img { width: auto; max-width: 100%; }
+.device img { height: auto !important; }
+.device.wide img { max-width: 100%; }

@@ -3,6 +3,12 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-10-07
+
+### Fixed
+- The console's display preview was stretched with one side screen open (it assumed three screens): its box now
+  follows the picture (main screen + the open side screens).
+
 ## [1.6.0] - 2026-10-07
 
 Three screens, each with its own scroll. **Needs the Klaude avatar of 2026-10-07 (1.6.0 menu icon) or later** (new
