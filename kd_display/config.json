@@ -54,6 +54,11 @@
 
   "sync": {
     "payload_bytes": 30,
+    "tiers": {"full": 30, "standard": 16, "lite": 10},
+    "tier": "full",
+    "_tiers_doc": "Sync tiers of the avatar (KuraDot full / standard / lite; the Klaude avatar is full): a page of payload_bytes goes over the wire in chunks of tiers[tier] bytes. full = KD_P + KD_B0..29 (248 bits); standard = 2 chunks of 16 B (KD_P + KD_S0 + KD_B0..15, 137 bits); lite = 3 chunks of 10 B (KD_P + KD_S0..1 + KD_B0..9, 90 bits). Only the chunks that changed are sent.",
+    "limits": {"lite": {"hires": false, "wings": 1}},
+    "_limits_doc": "features a tier leaves out: hires false = pictures only in the low-resolution mode; wings n = at most n side screens open at once.",
     "param_prefix": "KD_",
     "rate_hz": 3.0,
     "refresh": true,

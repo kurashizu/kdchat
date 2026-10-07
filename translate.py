@@ -82,7 +82,10 @@ def detect(text: str, hint: str = "auto", latin: str = "en") -> str:
         return latin
     if counts.get("ja"):                        # kana anywhere: Japanese (it mixes in kanji)
         return "ja"
-    k = max(counts, key=counts.get)
+    # any other script beats Latin letters: names, brands and English words inside a Chinese / Russian / ... sentence
+    # ("这是 KuraDot Standard 版") are Latin, the sentence is not
+    other = {k: n for k, n in counts.items() if k != "latin"}
+    k = max(other or counts, key=(other or counts).get)
     if k == "han":
         return "zh_hant" if latin == "zh_hant" else "zh"
     if k == "latin":

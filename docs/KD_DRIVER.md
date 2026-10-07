@@ -120,6 +120,11 @@ least error and maps the other pixels to the nearest of them. Shapes and sprites
 
 - The memory is 7,230 bytes in 241 pages of 30 bytes. Each frame sends one page: the page id (`KD_P`) plus 30 data
   bytes (`KD_B0..KD_B29`), 248 bits of synced parameters. Default rate 3 frames per second.
+- KuraDot avatars come in three **sync tiers** with the same memory: `full` (one frame per page, as above; Klaude),
+  `standard` (a page in 2 chunks of 16 bytes, chunk index in the Bool `KD_S0`, 137 bits) and `lite` (3 chunks of 10 bytes,
+  `KD_S0`/`KD_S1`, 90 bits; pictures only in low resolution, one side screen). Only the chunks that changed are sent.
+  Pick it with `Display(tier=...)` (or env `KD_TIER`, else `config.json` `sync.tier`) or switch with `d.set_tier(t)`
+  (everything goes out again). `Config.tier_of(parameter_names)` tells the tier from an avatar's parameters.
 - `present()` only encodes. Frames go out from `tick()` or `run()`.
 - Only changed pages are sent. A full screen takes a few dozen frames; changing one line of text usually 1 or 2.
 - All screen commands (scroll offsets, zoom, transitions, ...) live in one register page: changing one costs 1 frame.
@@ -142,7 +147,7 @@ of times has no side effect, and a late joiner ends up seeing exactly what every
 
 ```python
 Display(cfg=None, sender=None, dry=False, log=None, host=None, port=None,
-        feedback=False, listen_host=None, listen_port=None)
+        feedback=False, listen_host=None, listen_port=None, tier=None)
 ```
 
 | Argument | Meaning |
@@ -154,6 +159,7 @@ Display(cfg=None, sender=None, dry=False, log=None, host=None, port=None,
 | `log` | callback `f(page_id, payload)`, called for every frame sent |
 | `feedback` | listen to VRChat's OSC output (default 127.0.0.1:9001) and resend any frame whose parameters did not come back. Optional; it can only check your own client, not other viewers |
 | `listen_host`, `listen_port` | where to listen with `feedback` |
+| `tier` | the avatar's sync tier: `full` / `standard` / `lite` (default env `KD_TIER`, else `config.json` `sync.tier`) |
 
 On start the client does not know what the avatar still holds (maybe a previous run's content), so the first pass sends
 every page: empty graphics pages are replaced by one clear command, all other pages are sent one by one.
@@ -539,7 +545,8 @@ d.present()
 | Parameter | Type | Meaning |
 |---|---|---|
 | `KD_P` | int 0..255 | page id; the page's bytes are `KD_B0..KD_B29` of the same frame |
-| `KD_B0` .. `KD_B29` | int 0..255 | the 30 bytes of the page |
+| `KD_S0`, `KD_S1` | bool | (standard / lite tiers only) the chunk index s: which part of the page the bytes are |
+| `KD_B0` .. `KD_B29` | int 0..255 | the 30 bytes of the page (standard: `KD_B0..15` = page bytes 16 s .. 16 s + 15; lite: `KD_B0..9` = page bytes 10 s .. 10 s + 9) |
 
 Page ids: 0 = idle, 1..239 = memory pages; 254 = clear graphics and 255 = chime (commands, allocated downwards from
 255, so the memory can grow upwards); 240..253 are free. While `KD_P` holds a page id, the avatar's animator

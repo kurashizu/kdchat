@@ -3,6 +3,27 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] - 2026-10-07
+
+### Added
+- **KuraDot avatars in three versions** (sync tiers with the same screen): Full (also Klaude), Standard and Lite, which
+  use fewer synced parameters (251 / 140 / 93 bits with the menu) and send a page in 1 / 2 / 3 chunks, only the changed
+  ones. Settings → Display → Avatar version: Auto finds it from VRChat's OSC files on this computer (the newest avatar
+  with display parameters), or pick it. Lite shows pictures in low resolution and opens one side screen (with two
+  translation languages the second goes to the game chatbox only).
+
+### Fixed
+- Turning the display on no longer "syncs" for over a minute: the first pass sends one clear command, the pages that
+  decide what is drawn and the pages with content (Full: about 10 s instead of about 80 s); empty pages are refreshed
+  in the background.
+- Side screens sometimes unfolded and folded again by themselves (and transitions could play out of turn): a frame whose
+  page id and bytes reached the avatar apart could make it read a register value that was never sent. The frames with
+  those registers now go out between idle frames, and command frames keep the bytes on the wire. Works with the
+  avatars already uploaded.
+- A Chinese / Korean / Russian ... message with English words in it ("这是 KuraDot 版") was detected as English: the
+  English side screen showed the original and the small font drew "?" for the Chinese characters. Any non-Latin script
+  now decides the language; a message the small font cannot draw keeps the normal font.
+
 ## [1.9.0] - 2026-10-07
 
 ### Added

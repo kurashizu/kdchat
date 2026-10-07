@@ -23,6 +23,9 @@ def test_detect():
     assert tr.detect("hello") == "en"
     assert tr.detect("hello", hint="fr") == "fr"
     assert tr.detect("123 :)") == "en"
+    assert tr.detect("这是 KuraDot Standard 版") == "zh"          # Latin words inside: still the sentence's language
+    assert tr.detect("VRChat 진짜 재밌다") == "ko"
+    assert tr.detect("Это KuraDot demo version") == "ru"
 
 
 def test_tidy_full_width():

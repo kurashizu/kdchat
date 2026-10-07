@@ -63,6 +63,8 @@ DEFAULTS = {
     "size": 0.40,            # the device's width in metres (a 128 px wide screen), 0.20 .. 0.60 (register size)
     "wings": "auto",         # the side screens: auto = unfold while they have something to show (translations, pictures),
                              # on = always unfolded, off = never
+    "tier": "auto",          # the avatar's sync tier (KuraDot full / standard / lite; Klaude = full): auto = from VRChat's
+                             # OSC files on this computer (tier_detect), else the given one
 }
 SCREENS = tuple(f"{w}x{h}" for w, h in _SIZES)      # from kd_display/config.json screen.sizes
 CHOICES = {
@@ -75,6 +77,7 @@ CHOICES = {
     "image_screen": ("auto", "keep"),
     "image_res": ("high", "low"),
     "wings": ("auto", "on", "off"),
+    "tier": ("auto", "full", "standard", "lite"),
 }
 WING_PAGES = 4                # text pages of each side screen's region in the single layout (the newest translation)
 MIRROR_PAGES = 17             # chat layout with translations: a side screen's region (header + 16 line slot pages): the
@@ -285,12 +288,23 @@ class _Log:
         self.lay: dict = {}
 
 
+def _small_ok(text: str) -> bool:
+    """can the 5x7 small font draw every character of text?"""
+    from kd_display.kd.tiny import SMALL_CODES
+    ok = set(SMALL_CODES) | {"\n"}
+    return all(ch in ok for ch in text)
+
+
 class KdChat:
     def __init__(self, host: str, port: int, dry: bool = False, settings: dict | None = None, log=None, run=True):
         self.lock = threading.RLock()
         self.d = Display(host=host, port=port, dry=dry)
         self.base_palette = list(self.d.mem.palette)
         self.s = clean_settings(settings or {})
+        self.detected = None                 # tier_detect.detect() result (tier "auto")
+        self._detect_at = 0.0
+        self.on_tier = None                  # f(): the tier changed (the app re-assigns the side screens)
+        self.d.set_tier(self.tier_wanted())
         self._apply_screen()
         self.msgs: list[dict] = []          # {id, t, text, live, lines, gap, vy0, h}
         self.draft: str | None = None        # immediate=False: shown greyed at the bottom, not "sent"
@@ -319,6 +333,33 @@ class KdChat:
         self.d.present()
         if run:
             threading.Thread(target=self._loop, name="kd-sender", daemon=True).start()
+
+    def tier_wanted(self):
+        """the tier to send in: the setting, or with "auto" the detected one (full when nothing is found)"""
+        if self.s["tier"] != "auto":
+            return self.s["tier"]
+        return (self.detected or {}).get("tier", "full")
+
+    def _check_tier(self, force=False):
+        """tier "auto": look at VRChat's OSC files now and then (every 10 s); switch when the avatar's tier changed"""
+        now = time.monotonic()
+        if self.s["tier"] == "auto" and (force or now - self._detect_at > 10):
+            self._detect_at = now
+            import tier_detect
+            try:
+                self.detected = tier_detect.detect()
+            except Exception:                                # (a half-written file, permissions: try again later)
+                pass
+        want = self.tier_wanted()
+        if want != self.d.cfg.tier:
+            self.d.set_tier(want)
+            self._full = True
+            if self.img_src:
+                threading.Thread(target=self._prepare_images, name="kd-pictures", daemon=True).start()
+            if self.on_tier:
+                self.on_tier()
+            return True
+        return False
 
     def tick(self):
         """one sender step (what the thread does each frame; for tests with run=False)"""
@@ -372,8 +413,11 @@ class KdChat:
         return "small" if self.wing_lang[side - 1] in self.small_langs else self.s["scale"]
 
     def msc(self, m):
-        """a main log message's text scale"""
-        return "small" if m.get("reverted") or m.get("lang") in self.small_langs else self.s["scale"]
+        """a main log message's text scale: the small font for a small_langs language, unless the message has a
+        character that font lacks (a mostly-Latin message with Chinese in it is detected as English)"""
+        if m.get("reverted"):
+            return "small"
+        return "small" if m.get("lang") in self.small_langs and _small_ok(m.get("text", "")) else self.s["scale"]
 
     def pages_of(self, k):
         """pages per line slot: a side screen in the small font has 1-page lines (21 ASCII glyphs) and its time labels
@@ -401,9 +445,11 @@ class KdChat:
         if self.s["wings"] == "off" or not self.active:
             return frozenset()
         if self.s["wings"] == "on":
-            return frozenset((1, 2))
-        return frozenset(side for side in (1, 2) if self.wing_img.get(side) or self.wlog_on(side)
-                         or (self.wing_text.get(side) or (None,))[0])
+            sides = (1, 2)
+        else:
+            sides = [side for side in (1, 2) if self.wing_img.get(side) or self.wlog_on(side)
+                     or (self.wing_text.get(side) or (None,))[0]]
+        return frozenset(sorted(sides)[-self.d.cfg.max_wings:] if self.d.cfg.max_wings else ())   # (lite: one, the right)
 
     @property
     def lh(self):
@@ -447,6 +493,7 @@ class KdChat:
         while not self._stop:
             with self.lock:
                 try:
+                    self._check_tier()
                     if self.active:
                         if self.s["clock"] and datetime.now().strftime("%H:%M") != self._minute:
                             self._header()
@@ -480,6 +527,8 @@ class KdChat:
             self.s = clean_settings(new, self.s)
             if old["screen"] != self.s["screen"]:
                 self._apply_screen()
+            if old["tier"] != self.s["tier"]:
+                self._check_tier(force=True)
             if any(old[k] != self.s[k] for k in ("scale", "show_time", "divider", "layout", "screen", "clock", "date", "wings")):
                 self._relayout()
             pics = bool(self.img_src) and any(old[k] != self.s[k] for k in
@@ -654,7 +703,7 @@ class KdChat:
             src = dict(self.img_src)
             wings = any(k for k in src)
             top = 0 if self.s["image_full"] or not (self.s["clock"] or self.s["date"]) else HDR
-            low = wings or self.s["image_res"] == "low"
+            low = wings or self.s["image_res"] == "low" or not c.hires_ok      # (lite: low resolution only)
             if 0 in src and self.s["image_screen"] == "auto":
                 size = best_size(src[0], top)
             else:
@@ -878,6 +927,8 @@ class KdChat:
                     "images": sorted({0: "main", 1: "left", 2: "right"}[k] for k in self.img_src),
                     "wings": sorted({1: "left", 2: "right"}[k] for k in self.wings_open()), "lowres": self.d.cfg.gscale != self.d.cfg.gscale0,
                     "palette": ["#%02x%02x%02x" % tuple(p) for p in self.base_palette],
+                    "tier": self.d.cfg.tier, "tier_detected": self.detected, "sync_bits": self.d.cfg.sync_bits,
+                    "max_wings": self.d.cfg.max_wings, "hires": self.d.cfg.hires_ok,
                     "width": self.d.cfg.W, "height": self.d.cfg.H}
 
     def preview_png(self) -> bytes:

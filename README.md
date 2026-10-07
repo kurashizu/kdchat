@@ -39,10 +39,20 @@ that is usually fine; on a shared network, set one.
 
 ## The Klaude display
 
-Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136)? Turn on **Display** at the
-top of the console: your messages show up as a chat log on the display above your head, with the time, a typing
-indicator and pictures you paste in (any common format, phone photos included). Everyone around you sees it, including
-people who join later. With any other avatar, leave it off.
+Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136) or an avatar with KuraDot
+(try the public [KuraDot Demo](https://vrchat.com/home/avatar/avtr_90a5ed50-2a03-471a-bd73-a91ed225df92))? Turn on
+**Display** at the top of the console: your messages show up as a chat log on the display above your head, with the
+time, a typing indicator and pictures you paste in (any common format, phone photos included). Everyone around you sees
+it, including people who join later. With any other avatar, leave it off.
+
+KuraDot comes in three versions that use fewer of the avatar's synced parameters (**Settings → Display → Avatar
+version**; Auto finds it when kdchat runs on the VRChat computer):
+
+| Version | Synced parameters | Speed | Leaves out |
+|---|---|---|---|
+| Full (also Klaude) | 251 bits | fastest | nothing |
+| Standard | 140 bits | about half | nothing |
+| Lite | 93 bits | about a third | pictures in high resolution; only one side screen (a second translation goes to the game chatbox) |
 
 **Side screens** unfold from the display when translation is on, one per translation language: each shows the chat
 in its language with every message's time, scrolling on its own. Latin-script languages can use the display's small

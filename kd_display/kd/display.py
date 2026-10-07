@@ -151,12 +151,14 @@ class ShapeLayer:
 
 class Display:
     def __init__(self, cfg=None, sender=None, dry=False, log=None, host=None, port=None, feedback=False,
-                 listen_host=None, listen_port=None):
+                 listen_host=None, listen_port=None, tier=None):
         """host / port: VRChat's OSC input (default: KD_OSC_HOST / KD_OSC_PORT env, else config.json "osc").
         feedback: listen to VRChat's OSC output (listen_host / listen_port, default 127.0.0.1:9001): every frame is
         checked against the parameters the avatar reports back and resent when it did not arrive; /avatar/change
-        resends everything."""
-        self.cfg = cfg or Config()
+        resends everything. tier: the avatar's sync tier (config sync.tiers; default KD_TIER env, else config)."""
+        self.cfg = cfg or Config(tier=tier)
+        if not self.cfg.hires_ok and self.cfg.gscale == self.cfg.gscale0:
+            self.cfg.set_size(self.cfg.size, 2 * self.cfg.gscale0)     # this tier draws pictures in low resolution only
         self.cm = Charmap()
         self.layout = Layout(self.cfg, self.cm, self.cfg.raw["text"]["fallback_char"])
         self.gfx = Canvas(self.cfg.GW, self.cfg.GH)      # graphics plane (screen / gfx_scale)
@@ -197,10 +199,13 @@ class Display:
             self.listen = self.cfg.osc_listen(listen_port, listen_host)
             Listener(self.listen[1], self._on_osc, self.listen[0]).start()
             c = self.cfg
-            names = [c.param_page()] + [c.param_byte(k) for k in range(c.P)]
+            names = c.params()
+            subs, data = names[1:1 + c.sub_bits], names[1 + c.sub_bits:]
             # nothing heard yet = unknown (VRChat only reports changes; no report at all = no feedback)
             self.link.check = lambda: (None if not any(n in self.seen for n in names) else
-                                       (self.seen.get(names[0], 0), bytes(self.seen.get(n, 0) & 255 for n in names[1:])))
+                                       (self.seen.get(names[0], 0),
+                                        sum((self.seen.get(n, 0) & 1) << i for i, n in enumerate(subs)),
+                                        bytes(self.seen.get(n, 0) & 255 for n in data)))
 
     def _on_osc(self, addr, args):
         if addr == "/avatar/change":
@@ -210,9 +215,10 @@ class Display:
             self.seen[addr[19:]] = int(round(args[0])) if not isinstance(args[0], str) else 0
 
     # ---------------- frames
-    def _send(self, pid, payload):
+    def _send(self, pid, sub, payload):
         c = self.cfg
         items = [(f"/avatar/parameters/{c.param_page()}", pid)]
+        items += [(f"/avatar/parameters/{c.param_sub(i)}", bool(sub >> i & 1)) for i in range(c.sub_bits)]
         items += [(f"/avatar/parameters/{c.param_byte(k)}", int(b)) for k, b in enumerate(payload)]
         if self.sender:
             self.sender.send(items)
@@ -373,6 +379,8 @@ class Display:
                 v = min(self.cfg.size_max, max(self.cfg.size_min, float(v)))
             if k == "wings":
                 v = wing_sides(v)
+                if len(v) > self.cfg.max_wings:
+                    raise ValueError(f"the {self.cfg.tier} tier opens at most {self.cfg.max_wings} side screen(s)")
             if k == "wing_text_y":
                 v = tuple(None if x is None else int(round(x)) for x in v)
                 assert len(v) == 2, "wing_text_y: (left, right), None = with text_y"
@@ -397,11 +405,28 @@ class Display:
         # value is applied, relative to what viewers hold, so every transition replays.
         self.fx_queue.append({"e": e, "show": show, "d": d, "wait": None, "asked": None})
 
+    def set_tier(self, tier):
+        """the avatar's sync tier changed (another avatar): frames are cut differently, the avatar holds nothing of
+        ours yet -> everything goes out again; tiers without high-resolution pictures switch to low resolution"""
+        if tier == self.cfg.tier:
+            return
+        self.cfg.set_tier(tier)
+        self.link.q.clear()
+        self.link.forget()
+        self.link.force = set(self.link.order)
+        self.link._booting = True                     # (a new avatar: the fast start, see kd/link.py)
+        if len(self.state.get("wings") or ()) > self.cfg.max_wings:
+            self.state["wings"] = frozenset(sorted(self.state["wings"])[-self.cfg.max_wings:]) if self.cfg.max_wings else frozenset()
+        if not self.cfg.hires_ok and self.cfg.gscale == self.cfg.gscale0:
+            self.set_size(self.cfg.size, lowres=True)
+
     def set_size(self, i, lowres=None):
         """switch the screen to cfg.sizes[i] (e.g. 0 = 176x96, 1 = 128x128): every viewer's screen changes shape when
         the register arrives. lowres True / False switches the graphics resolution too (None = keep): low resolution =
         every graphics pixel 2x2 screen px, a quarter of the data (a picture in ~1/4 of the time). The graphics canvas
         starts empty at the new size / resolution; text positions are the caller's."""
+        if not self.cfg.hires_ok:
+            lowres = True                             # (the tier has no high-resolution pictures)
         gs = None if lowres is None else (2 if lowres else 1) * self.cfg.gscale0
         if i == self.cfg.size and gs in (None, self.cfg.gscale):
             return

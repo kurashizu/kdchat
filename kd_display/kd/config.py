@@ -39,7 +39,7 @@ def bits_for(n):
 
 
 class Config:
-    def __init__(self, path=None):
+    def __init__(self, path=None, tier=None):
         self.path = path or os.path.join(ROOT, "config.json")
         with open(self.path, encoding="utf-8") as f:
             self.raw = json.load(f)
@@ -64,6 +64,9 @@ class Config:
         assert len(self.palette) == 16
         self.P = sy["payload_bytes"]
         self.prefix = sy["param_prefix"]
+        # sync tier: a page goes over the wire in n_chunks chunks of C bytes (chunk index in sub_bits synced Bools)
+        self.tiers = sy.get("tiers", {"full": self.P})
+        self.set_tier(tier or os.environ.get("KD_TIER") or sy.get("tier", "full"))
         self.rate_hz = sy["rate_hz"]
 
         # text header: x, y, scale2, mode(2), len, fg(4), bg(4), box
@@ -171,7 +174,6 @@ class Config:
         for a, n in self.regions.values():
             self.used[a:a + n] = b"\x01" * n
         self.n_words = math.ceil(self.mem_bytes / 2)
-        self.sync_bits = 8 + 8 * P
 
         # renderers: which 16-bit words each one animates (local index = position in its sorted list)
         self.renderers = []
@@ -211,11 +213,48 @@ class Config:
         return (host or os.environ.get("KD_OSC_LISTEN_HOST") or o.get("listen_host", "127.0.0.1"),
                 int(port or os.environ.get("KD_OSC_LISTEN_PORT") or o["listen_port"]))
 
+    def set_tier(self, tier):
+        """the sync tier of the avatar (config sync.tiers): chunk size, chunk index bits, feature limits"""
+        sy = self.raw["sync"]
+        assert tier in self.tiers, f"unknown sync tier {tier!r} (config sync.tiers: {', '.join(self.tiers)})"
+        self.tier = tier
+        self.C = min(self.P, self.tiers[tier])
+        assert self.C % 2 == 0, "chunk sizes must be even (16-bit words)"
+        self.n_chunks = math.ceil(self.P / self.C)
+        self.sub_bits = bits_for(self.n_chunks) if self.n_chunks > 1 else 0
+        self.sync_bits = 8 + self.sub_bits + 8 * self.C
+        lim = sy.get("limits", {}).get(tier, {})
+        self.hires_ok = lim.get("hires", True)          # False: graphics only in the low-resolution mode
+        self.max_wings = lim.get("wings", 2)            # side screens open at once
+        return self
+
+    @staticmethod
+    def tier_of(params):
+        """the tier an avatar's synced parameter names say (None: no display): KD_S1 = lite, KD_S0 = standard, KD_P =
+        full (the chunk index bits tell them apart)"""
+        names = set(params)
+        if "KD_P" not in names:
+            return None
+        return "lite" if "KD_S1" in names else "standard" if "KD_S0" in names else "full"
+
     def param_page(self):
         return self.prefix + "P"
 
     def param_byte(self, k):
         return f"{self.prefix}B{k}"
+
+    def param_sub(self, i):
+        """chunk index bit i (a synced Bool; only tiers with more than one chunk per page)"""
+        return f"{self.prefix}S{i}"
+
+    def params(self):
+        """the synced parameters of the tier, in wire order: page id, chunk index bits, payload bytes"""
+        return [self.param_page()] + [self.param_sub(i) for i in range(self.sub_bits)] + \
+            [self.param_byte(k) for k in range(self.C)]
+
+    def chunk(self, s):
+        """byte range (start, end) of chunk s inside a page"""
+        return s * self.C, min(self.P, (s + 1) * self.C)
 
     def set_size(self, i, gscale=None):
         """switch the logical screen size (index into sizes) and, with gscale, the graphics resolution: gscale 2 = the
@@ -273,4 +312,4 @@ class Config:
                 f"({self.colors_per_tile} colours/tile), memory {self.mem_bytes} B (bitmap {self.bitmap_bytes}, tilecol "
                 f"{self.tc_bytes}, palette @{self.pal_base}, text {self.text_bytes} @{self.text_base}, regs @{self.reg_base}, "
                 f"sprites {self.spr_bytes} @{self.spr_base}), "
-                f"{self.pages} pages x {self.P} B, renderers: {rs}; sync {self.sync_bits} bits/frame, header {self.hdr_bytes} B")
+                f"{self.pages} pages x {self.P} B ({self.tier}: {self.n_chunks} x {self.C} B chunks), renderers: {rs}; sync {self.sync_bits} bits/frame, header {self.hdr_bytes} B")

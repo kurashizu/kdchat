@@ -300,6 +300,7 @@ def _startup() -> None:
                 kd_st["show_time"] = True                  # 1.8.1: one setting for every screen (the side screens
                                                            # always showed the time before): on, as they looked
             _kd = kd_chat.KdChat(ip, port, dry=KD_DRY, settings=kd_st)
+            _kd.on_tier = _tr_apply                      # (lite: one side screen -> the languages are re-assigned)
         except Exception as e:     # noqa: BLE001
             log.error("Klaude display output failed to start: %r", e)
     else:
@@ -604,8 +605,11 @@ def _tr_wings_on() -> bool:
 
 
 def _tr_sides() -> dict:
-    """side screen -> language: one target on the right, two on the left and the right"""
+    """side screen -> language: one target on the right, two on the left and the right (an avatar of the lite tier opens
+    one side screen: the first language on the right, the second goes to the game chatbox only)"""
     ts = list(_tr_settings["targets"]) if _tr_wings_on() else []
+    if len(ts) > 1 and _kd is not None and _kd.d.cfg.max_wings < 2:
+        ts = ts[:1]
     return {} if not ts else {"right": ts[0]} if len(ts) == 1 else {"left": ts[0], "right": ts[1]}
 
 
@@ -1212,7 +1216,8 @@ def get_kd_settings() -> dict:
     """All options and their choices: layout (chat/single), scale (1/2), long (left/up/cut), speed, show_time,
     divider, clock, date, invert, highlight, image_full, color / alt / accent / meta (palette index; alt 0 = off),
     image_fit, image_screen, image_res (high / low: full resolution or 2×2 pixels, low is ~3× faster), size (the
-    display's width in metres, 0.20-0.60), screen."""
+    display's width in metres, 0.20-0.60), screen, tier (the avatar's sync tier: auto / full / standard / lite; auto = from
+    VRChat's OSC files on this computer, see GET /kd/status tier_detected)."""
     k = _need_kd()
     return {"settings": k.s, "choices": {k2: list(v) for k2, v in kd_chat.CHOICES.items()}, "defaults": kd_chat.DEFAULTS}
 

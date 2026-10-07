@@ -17,7 +17,10 @@ goes out within about len(order) / AGE_STEP frames.
 
 Pages that became all zero are refreshed too for zero_refresh_s (a viewer that missed the frame or the clear command
 would otherwise keep the old content forever); after that every viewer holds zeros there anyway. At start the client
-does not know what the avatar holds (an earlier session may have left content), so every page is sent once.
+does not know what the avatar holds (an earlier session may have left content): one clear command zeroes the graphics,
+the pages that decide what is drawn (palette, registers, the text head, sprite registers, shapes) and every page with
+content go out; the other empty pages (text after the end marker, sprite patterns) draw nothing and are left to the
+zero refresh, so a fresh start is synced in seconds instead of sending every page.
 
 Text is a list of runs walked from the first byte, so a half-sent text area can decode old bytes as headers = garbage
 glyphs. That only happens when the run STRUCTURE changes (where runs start, their lengths and code pages): content-only
@@ -28,8 +31,23 @@ with what is already on the air, walks exactly like the wanted text. A graphics 
 one clear command, so old bytes are never decoded in the new mode. Pages that became zero are refreshed in every 4th
 refresh frame only, so they do not slow late joiners down.
 
-Feedback (optional): `check()` returns what the avatar holds now (page id, payload) from VRChat's OSC output. Before
-each new frame the previous one is compared with it; a frame that did not arrive is queued again at once."""
+Feedback (optional): `check()` returns what the avatar holds now (page id, chunk, payload) from VRChat's OSC output.
+Before each new frame the previous one is compared with it; a frame that did not arrive is queued again at once.
+
+Split frames: a frame's page id and bytes may reach a viewer's animator apart (VRChat syncs the parameters on its own;
+an OSC bundle may land over two animator frames), so for a moment the avatar sees the NEW id with the OLD bytes or the
+other way round. Memory pages repair themselves with the next frame, but the FX layers that ACT on a register (show /
+side screens: register show, transitions: register fx) would play a wrong animation (a side screen unfolding and folding
+again). So the frames carrying those registers are sandwiched between idle frames (page id 0) with the SAME bytes: any
+split then pairs their page id only with their own bytes. Command and idle frames keep the last bytes on the wire
+(zeros would, split, briefly zero the page before them).
+
+Sync tiers (config sync.tiers): with chunks smaller than a page, a page goes out as its CHANGED chunks (chunk index s
+in the frame), one per tick, back to back before anything else; a forced page (unknown avatar state, a lost frame) goes
+out whole, a refresh sends its non-zero chunks (and zero chunks that changed within zero_refresh_s). All the logic above
+works on whole pages: a page counts as sent when its chunks are queued, and the queue always drains first, so pages
+still arrive in the order chosen. Between two chunks of one page a viewer holds a mix of the old and the new page for a
+tick (the full tier never does)."""
 import time
 
 AGE_STEP = 2
@@ -38,7 +56,7 @@ AGE_STEP = 2
 class Link:
     def __init__(self, cfg, send_frame, now=time.monotonic):
         self.cfg = cfg
-        self.send_frame = send_frame                 # f(page_id, bytes)
+        self.send_frame = send_frame                 # f(page_id, chunk, bytes)
         self.now = now
         self.want = bytearray(cfg.pages * cfg.P)
         self.sent = bytearray(cfg.pages * cfg.P)      # what the viewers should hold
@@ -54,7 +72,9 @@ class Link:
         self.frames = 0
         self.cmds = []                               # command frames to send (page ids, config "commands")
         self.check = None                            # f() -> (page_id, bytes) seen on the avatar, or None
-        self.last = None                             # last frame sent (page_id, payload)
+        self.last = None                             # last frame sent (page_id, chunk, payload)
+        self.q = []                                  # chunk frames still to send (page_id, chunk, payload)
+        self.czeroed = {}                            # (page, chunk) -> tick it was last sent as zero
         self.force = set()                           # pages to send again (lost on the way)
         self.ok = self.lost = 0
         self.waiting = {}                            # dirty page -> tick it was first seen dirty
@@ -82,7 +102,11 @@ class Link:
                 self.order.append(p)
         self.pos = {p: i for i, p in enumerate(self.order)}
         core = set(first) | set(self.text_pages)
-        self.force = set(self.order)                  # unknown avatar state: send every page once
+        self.force = set(self.order)                  # unknown avatar state: send every page once (narrowed by _boot)
+        self.essential = set(first) | {self.text_head}
+        # (page id, chunk) of the frames whose registers drive FX animations: sent between idle frames (see above)
+        self.guarded = {(a // c.P + 1, (a % c.P) // c.C) for a in (c.regs.get("fx"), c.regs.get("show")) if a is not None}
+        self._booting = True
         if 0 < self.core_share < 1:
             self.groups = {"core": [p for p in self.order if p in core], "rest": [p for p in self.order if p not in core]}
         else:                                         # no split: one cursor over the whole order
@@ -99,17 +123,36 @@ class Link:
     def _page(self, buf, p):
         return buf[p * self.cfg.P:(p + 1) * self.cfg.P]
 
+    def _boot(self):
+        """the first time there is something to send: the empty pages that draw nothing are not forced (see above);
+        the graphics get one clear command instead of their empty pages"""
+        if not self._booting:
+            return
+        self._booting = False
+        for p in list(self.force):
+            if p not in self.essential and not any(self._page(self.want, p)):
+                self.force.discard(p)
+                self.zeroed[p] = self._ticks
+        c = self.cfg                                   # the clear as a command frame, first in line (what _clear records)
+        self.sent[0:c.clear_bytes] = bytes(c.clear_bytes)
+        for p in range(c.clear_bytes // c.P):
+            if not any(self._page(self.want, p)):
+                self.force.discard(p)
+                self.zeroed[p] = self._ticks
+        self.cmds.insert(0, c.id_clear_gfx)
+
     def dirty(self, p):
-        return p in self.force or self._page(self.want, p) != self._page(self.sent, p)
+        return p in self.force or self._page(self.want, p) != self._page(self.sent, p) or \
+            any(f[0] == p + 1 for f in self.q)
 
     def _verify(self):
         if not (self.check and self.last):
             return
-        seen, (pid, payload) = self.check(), self.last
+        seen, (pid, sub, payload) = self.check(), self.last
         self.last = None
         if seen is None:
             return
-        if seen == (pid, bytes(payload)):
+        if seen == (pid, sub, bytes(payload)):
             self.ok += 1
             return
         self.lost += 1
@@ -128,10 +171,16 @@ class Link:
         self.cmds.append(cid)
 
     def pending(self):
+        self._boot()
         return [p for p in self.order if self.dirty(p)]
 
     def eta(self):
-        return len(self.pending()) / self.cfg.rate_hz
+        c, n = self.cfg, len(self.q)
+        for p in self.pending():
+            if any(f[0] == p + 1 for f in self.q):
+                continue
+            n += c.n_chunks if p in self.force else len(self._chunks(p, self._page(self.sent, p), self._page(self.want, p)))
+        return n / c.rate_hz
 
     def _clear_pays(self):
         cleared = range(self.cfg.clear_bytes // self.cfg.P)      # the pages the clear command zeroes (not the palette's)
@@ -143,12 +192,15 @@ class Link:
         """send one frame; returns (page_id, payload) or None when idle"""
         self._ticks += 1
         self._verify()
+        if self.q:                                    # the rest of a page that is on its way
+            return self._out(*self.q.pop(0))
+        self._boot()
         if self.cmds:
             cid = self.cmds[0]
             if self.last and self.last[0] == cid:
-                return self._emit(0, bytes(self.cfg.P))      # the same command again: an idle frame between (an edge)
+                return self._emit(0, b"")                     # the same command again: an idle frame between (an edge)
             self.cmds.pop(0)
-            return self._emit(cid, bytes(self.cfg.P))
+            return self._emit(cid, b"")
         pend = self.pending()
         if self.refresh_on:
             self.credit = min(1.0, self.credit + self.refresh_rate / self.cfg.rate_hz)
@@ -159,7 +211,7 @@ class Link:
                     self._busy = 0
                     self.refreshed += 1
                     self.refreshed_core += p in self.groups["core"]
-                    return self._send_page(p)
+                    return self._send_page(p, refresh=True)
         if pend:
             for p in pend:
                 self.waiting.setdefault(p, self._ticks)
@@ -182,7 +234,7 @@ class Link:
             p = min(pend, key=lambda p: self.pos[p] - AGE_STEP * (self._ticks - self.waiting.get(p, self._ticks)))
             return self._send_page(p)
         if self.last and self.last[0] > self.cfg.pages:
-            return self._emit(0, bytes(self.cfg.P))          # never leave a command on the wire (a late joiner would act)
+            return self._emit(0, b"")                         # never leave a command on the wire (a late joiner would act)
         return None
 
     # ---------------- text consistency
@@ -252,10 +304,11 @@ class Link:
         bp, rel = off // c.P, off % c.P
         cut = bytearray(self._page(self.want, bp))
         cut[rel:min(c.P, rel + c.hdr_bytes)] = bytes(min(c.P, rel + c.hdr_bytes) - rel)
+        old, whole = bytes(self._page(self.sent, bp)), bp in self.force
         self.sent[bp * c.P:(bp + 1) * c.P] = cut
         self.force.discard(bp)
         self.waiting.pop(bp, None)
-        return self._emit(bp + 1, bytes(cut))
+        return self._emit(bp + 1, bytes(cut), old, whole)
 
     def _independent(self, on_air, wanted, text):
         """True if the pending text pages can go out in any order: the page boundaries where both run lists start a run
@@ -284,9 +337,10 @@ class Link:
             self.zeroed[p] = self._ticks
             if not any(self._page(self.want, p)):
                 self.sent_tick[p] = self._ticks              # final after the clear (others still have to go out)
-        return self._emit(c.id_clear_gfx, bytes(c.P))
+        return self._emit(c.id_clear_gfx, b"")
 
-    def _send_page(self, p):
+    def _send_page(self, p, refresh=False):
+        old, whole = bytes(self._page(self.sent, p)), p in self.force
         self.force.discard(p)
         self.waiting.pop(p, None)
         self.sent_tick[p] = self._ticks
@@ -295,7 +349,7 @@ class Link:
             self.zeroed.pop(p, None)
         elif p not in self.zeroed:
             self.zeroed[p] = self._ticks
-        return self._emit(p + 1, bytes(self._page(self.want, p)))
+        return self._emit(p + 1, bytes(self._page(self.want, p)), old, whole, refresh)
 
     def _next_refresh(self, pend):
         """next page of the group whose turn it is (core vs rest by refresh_core_share), after that group's cursor, that
@@ -320,11 +374,47 @@ class Link:
                         return p
         return None
 
-    def _emit(self, pid, payload):
+    def _chunks(self, p, old, new, whole=False, refresh=False):
+        """the chunks of page p to send: all (whole), the non-zero ones and recently zeroed ones (refresh), else the
+        ones that changed"""
+        c, out = self.cfg, []
+        for s in range(c.n_chunks):
+            a, b = c.chunk(s)
+            if whole or (refresh and (any(new[a:b]) or self._ticks - self.czeroed.get((p, s), -10 ** 9)
+                                      < self.zero_window * c.rate_hz)) or (not refresh and old[a:b] != new[a:b]):
+                out.append(s)
+        return out
+
+    def _emit(self, pid, payload, old=None, whole=True, refresh=False):
+        """a page frame (or a command / idle frame: its bytes are the last ones on the wire); tiers with chunks queue
+        the page's chunks; frames with FX registers go out between idle frames"""
+        c = self.cfg
+        if not 1 <= pid <= c.pages:
+            data = self.last[2] if self.last else bytes(c.C)
+            return self._out(pid, self.last[1] if self.last else 0, data)
+        p = pid - 1
+        if c.n_chunks == 1:
+            subs = [0]
+        else:
+            subs = self._chunks(p, old or bytes(c.P), payload, whole or old is None, refresh) or [0]
+        frames = []
+        for s in subs:
+            a, b = c.chunk(s)
+            if c.n_chunks > 1 and not any(payload[a:b]):
+                self.czeroed[(p, s)] = self._ticks
+            data = bytes(payload[a:b]) + bytes(c.C - (b - a))
+            if (pid, s) in self.guarded:
+                frames += [(0, s, data), (pid, s, data), (0, s, data)]
+            else:
+                frames.append((pid, s, data))
+        self.q.extend(frames)
+        return self._out(*self.q.pop(0))
+
+    def _out(self, pid, sub, data):
         self.frames += 1
-        self.last = (pid, bytes(payload))
-        self.send_frame(pid, payload)
-        return pid, payload
+        self.last = (pid, sub, bytes(data))
+        self.send_frame(pid, sub, data)
+        return pid, data
 
     def run(self, until_idle=False, stop=None):
         period = 1.0 / self.cfg.rate_hz

@@ -20,6 +20,17 @@
   let size = $state(40);
   $effect(() => { if (s) size = Math.round(s.size * 100); });
   const h3 = "text-muted-foreground mt-6 mb-1 text-xs font-semibold tracking-wide uppercase";
+  // the avatar's sync tier: what auto found, and what the lite tier leaves out
+  const lite = $derived(app.kdStat?.tier === "lite");
+  const tierDesc = $derived.by(() => {
+    const st = app.kdStat;
+    const parts = [t("tier.desc")];
+    if ((s?.tier ?? "auto") === "auto")
+      parts.push(st?.tier_detected ? t("tier.detected", { tier: opt("tier", st.tier_detected.tier), name: st.tier_detected.name || st.tier_detected.avatar })
+        : t("tier.notFound"));
+    if (lite) parts.push(t("tier.lite.note"));
+    return parts.join(" ");
+  });
 </script>
 
 {#if !app.kdAvailable}
@@ -28,6 +39,14 @@
   <p class="text-muted-foreground py-6 text-sm">{app.kdError ? t("kd.unavailable", { msg: app.kdError }) : "…"}</p>
 {:else}
   <div class="divide-y">
+    <SettingRow label={t("set.tier")} desc={tierDesc}>
+      <Select.Root type="single" value={s.tier ?? "auto"} onValueChange={(v) => app.setKd({ tier: v })}>
+        <Select.Trigger size="sm" class="w-48">{opt("tier", s.tier ?? "auto")}</Select.Trigger>
+        <Select.Content>
+          {#each ch.tier ?? ["auto", "full", "standard", "lite"] as v (v)}<Select.Item value={v}>{opt("tier", v)}</Select.Item>{/each}
+        </Select.Content>
+      </Select.Root>
+    </SettingRow>
     <SettingRow label={t("set.screen")}>
       <Select.Root type="single" value={s.screen} onValueChange={(v) => app.setKd({ screen: v })}>
         <Select.Trigger size="sm" class="w-48">{opt("screen", s.screen)}</Select.Trigger>
@@ -104,8 +123,9 @@
   <h3 class={h3}>{t("set.images")}</h3>
   <div class="divide-y">
     {#each [["image_fit", "img.fit", ["cover", "contain"]], ["image_screen", "img.screen", ["auto", "keep"]], ["image_res", "img.res", ["high", "low"]]] as [k, label, vals] (k)}
-      <SettingRow label={t(label as any)}>
-        <ToggleGroup.Root type="single" variant="outline" size="sm" value={s[k as string]} onValueChange={(v) => v && app.setKd({ [k as string]: v })}>
+      <SettingRow label={t(label as any)} desc={k === "image_res" && lite ? t("tier.liteImg") : ""} disabled={k === "image_res" && lite}>
+        <ToggleGroup.Root type="single" variant="outline" size="sm" value={k === "image_res" && lite ? "low" : s[k as string]} disabled={k === "image_res" && lite}
+          onValueChange={(v) => v && app.setKd({ [k as string]: v })}>
           {#each vals as v (v)}<ToggleGroup.Item value={v}>{t(`img.${v}` as any)}</ToggleGroup.Item>{/each}
         </ToggleGroup.Root>
       </SettingRow>

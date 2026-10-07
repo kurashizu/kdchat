@@ -53,6 +53,10 @@ export interface KdStatus {
   wings: string[];
   lowres: boolean;
   palette: string[];
+  tier?: string;
+  tier_detected?: { tier: string; avatar: string; name: string } | null;
+  max_wings?: number;
+  hires?: boolean;
   width: number;
   height: number;
 }
