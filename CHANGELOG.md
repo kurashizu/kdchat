@@ -3,6 +3,15 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.3] - 2026-10-07
+
+### Fixed
+- Scrolling no longer cuts the top line (or its time label) under the header: only whole lines show at the top of a
+  log, on every screen. Most visible on the square screen.
+- With side screens on, the square (and 160 x 112) screen's log started far below the header (up to a third of the
+  screen empty): every screen's log now starts right under its header.
+- While a log scrolled, the second line of a new two-line message could show for a moment without its first one.
+
 ## [1.8.2] - 2026-10-07
 
 ### Fixed

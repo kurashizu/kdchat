@@ -429,12 +429,13 @@ class KdChat:
     def top(self):
         """first row of the log band (the header above it). Revealing a line writes it below the band first: the band +
         the gap + one glyph must fit the 128 px ring (a screen lower than the ring leaves that room by itself)."""
-        # (and on tall screens: no more lines than the slots hold, K - 2 visible + a partial + the next one)
+        # (and on tall screens: no more lines than the slots hold. Lines are whole at the band's top and every scroll
+        # ends on a line's bottom: the band shows floor(band / lh) of them, at most K)
         H = self.d.cfg.H
         t = HDR if self.header_on or self.mirror() else 0          # (a side screen always has its language header)
         for k in (0, 1, 2):
             if self.log_on(k):
-                t = max(t, H - RING + self.gap_of(k) + self.gh_of(k), H - (self.K_of(k) - 2) * self.lh_of(k))
+                t = max(t, H - RING + self.gap_of(k) + self.gh_of(k), H - (self.K_of(k) + 1) * self.lh_of(k) + 1)
         return t
 
     @property
@@ -1183,8 +1184,9 @@ class KdChat:
             self._present_log()
 
     def _visible(self, row, S):
-        """does a line (its ink, or the label / divider in the gap above it) show in the band at scroll S?"""
-        return row[4] > S and row[3] < S + self.band
+        """does a line show in the band at scroll S? Only whole: one whose top (the label / divider in the gap above it
+        included) would be cut by the header is left out (the space stays empty above the first whole line)"""
+        return row[3] >= S and row[3] < S + self.band
 
     def _assign(self, k, rows, S, write=True, hidden_at=None):
         """bring log k's slots to the lines visible at scroll S: free the slots of lines not visible there, draw new /
@@ -1197,12 +1199,14 @@ class KdChat:
                 log.slots[i] = None; log.sig[i] = None; log.parts[i] = []
                 changed = True
         if write:
+            held = False
             for key in sorted(want, key=lambda q: rows[q][0]):
                 vy, parts, sig, top_y = rows[key][:4]
                 if key in log.slots:
                     i = log.slots.index(key)
-                elif hidden_at is not None and top_y < hidden_at + self.band:
-                    continue                                  # would show before the scroll: next step
+                elif held or hidden_at is not None and top_y < hidden_at + self.band:
+                    held = True                               # would show (cut) before the scroll: next step, and
+                    continue                                  # every line below it too (never line 2 without line 1)
                 elif None in log.slots:
                     i = log.slots.index(None)
                 else:
@@ -1248,11 +1252,11 @@ class KdChat:
                     deco = e.get("deco") or []
                     if deco:                                      # a rule from the left edge to just before the label
                         y, x1 = e["vy0"] + 3, deco[0]["x"] - 5
-                        if x1 > 8 and inside(y, y):
+                        if x1 > 8 and inside(e["vy0"], y):        # (with its label: not when the line is left out)
                             want.append(("rule", 2, y, x1 - 2 + 1, cols[m["id"]]))
                     elif s["divider"]:
                         y = e["vy0"] + (e["gap"] - 2) // 2
-                        if inside(y, y):
+                        if inside(e["vy0"], y):
                             want.append(("div", (c.W - 39) // 2, y, 39, DIVIDER))
                 m = msgs[-1] if msgs and k == 0 else None
                 if m is not None and m.get("draft") and m.get("lines"):
