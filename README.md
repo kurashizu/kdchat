@@ -5,7 +5,7 @@ and sends what you type to VRChat. With a **[KuraDot](https://krsz.booth.pm/item
 it also shows your messages on the pixel display above your head.
 
 > **KuraDot** - the pixel chat display for your own avatar (Modular Avatar, all three versions included) is on
-> [BOOTH](https://krsz.booth.pm/items/8953444), with a free trial. Watch it in action: [1-minute video](https://youtu.be/ly062shW3tA).
+> [BOOTH](https://krsz.booth.pm/items/8953444) (free trial) and [Jinxxy](https://jinxxy.com/kurashizu/oBlRh). Watch it in action: [1-minute video](https://youtu.be/ly062shW3tA).
 
 <p>
   <img src="docs/screenshot-phone.png" alt="The console on a phone" width="260">
@@ -50,7 +50,7 @@ Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c16
 time, a typing indicator and pictures you paste in (any common format, phone photos included). Everyone around you sees
 it, including people who join later. With any other avatar, leave it off.
 
-To put the display on your own avatar, get KuraDot on [BOOTH](https://krsz.booth.pm/items/8953444) (drag the prefab
+To put the display on your own avatar, get KuraDot on [BOOTH](https://krsz.booth.pm/items/8953444) or [Jinxxy](https://jinxxy.com/kurashizu/oBlRh) (drag the prefab
 onto the avatar and upload; free trial available).
 
 KuraDot comes in three versions that use fewer of the avatar's synced parameters. Pick the one on your avatar in the
