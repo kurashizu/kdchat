@@ -13,7 +13,7 @@ it also shows your messages on the pixel display above Klaude's head.
 - Type on your phone, read it in VRChat. Live typing and the "typing…" bubble included.
 - Translation into up to two languages, on your own computer.
 - Edit or take back what you sent, resend from the history.
-- English and 简体中文, light and dark.
+- English, 简体中文, 日本語 and 한국어, light and dark.
 - Optional password. Free and open source (MIT).
 
 ## Get started (Windows)

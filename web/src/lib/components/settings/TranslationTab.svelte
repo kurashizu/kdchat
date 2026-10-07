@@ -12,7 +12,7 @@
   import TranslationControls from "../TranslationControls.svelte";
   import { app } from "$lib/app.svelte";
   import { ask } from "$lib/confirm.svelte";
-  import { t } from "$lib/i18n.svelte";
+  import { t, langTag } from "$lib/i18n.svelte";
 
   let q = $state("");
   const s = $derived(app.tr?.settings);
@@ -56,7 +56,7 @@
   {#each packs as l (l.code)}
     <li class="flex items-center gap-3 px-3 py-2">
       <div class="min-w-0 flex-1">
-        <p class="truncate text-sm font-medium">{l.native}</p>
+        <p class="truncate text-sm font-medium" lang={langTag(l.code)}>{l.native}</p>
         {#if l.native !== l.name}<p class="text-muted-foreground truncate text-xs">{l.name}</p>{/if}
       </div>
       {#if l.state === "downloading"}

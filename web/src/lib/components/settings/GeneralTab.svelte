@@ -10,9 +10,8 @@
   import * as ToggleGroup from "$lib/components/ui/toggle-group";
   import SettingRow from "../SettingRow.svelte";
   import { app } from "$lib/app.svelte";
-  import { i18n, setLang, t, type Lang } from "$lib/i18n.svelte";
+  import { HTML_LANG, i18n, LANGS, setLang, t, type Lang } from "$lib/i18n.svelte";
 
-  const LANGS: [Lang, string][] = [["en", "English"], ["zh", "中文"]];
   const prefs = [
     ["live", "gen.live", "gen.liveDesc"],
     ["typingHint", "gen.typing", "gen.typingDesc"],
@@ -27,7 +26,7 @@
     <Select.Root type="single" value={i18n.lang} onValueChange={(v) => setLang(v as Lang)}>
       <Select.Trigger size="sm" class="w-40">{LANGS.find(([k]) => k === i18n.lang)?.[1]}</Select.Trigger>
       <Select.Content>
-        {#each LANGS as [k, name] (k)}<Select.Item value={k} lang={k === "zh" ? "zh-CN" : "en"}>{name}</Select.Item>{/each}
+        {#each LANGS as [k, name] (k)}<Select.Item value={k} lang={HTML_LANG[k]}>{name}</Select.Item>{/each}
       </Select.Content>
     </Select.Root>
   </SettingRow>

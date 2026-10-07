@@ -9,7 +9,7 @@
   import * as Command from "$lib/components/ui/command";
   import * as Popover from "$lib/components/ui/popover";
   import { app, type Language } from "$lib/app.svelte";
-  import { t } from "$lib/i18n.svelte";
+  import { t, langTag } from "$lib/i18n.svelte";
 
   let { exclude = [], onPick, label = undefined, size = "sm" }:
     { exclude?: string[]; onPick: (code: string) => void; label?: string; size?: "sm" | "default" } = $props();
@@ -48,7 +48,7 @@
           <Command.Group heading={t("tr.installed")}>
             {#each ready as l (l.code)}
               <Command.Item value={`${l.native} ${l.name} ${l.code}`} onSelect={() => pick(l)}>
-                <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate">{l.native}</span>
+                <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate" lang={langTag(l.code)}>{l.native}</span>
                   <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span>
                   {#if noDisplay.has(l.code)}<span class="text-muted-foreground shrink-0 text-[10px]" title={t("tr.noDisplayTip")}>{t("tr.noDisplay")}</span>{/if}</span>
                 <Check class="text-primary" />
@@ -60,7 +60,7 @@
           <Command.Group heading={t("tr.available")}>
             {#each other as l (l.code)}
               <Command.Item value={`${l.native} ${l.name} ${l.code}`} onSelect={() => pick(l)}>
-                <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate">{l.native}</span>
+                <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate" lang={langTag(l.code)}>{l.native}</span>
                   <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span>
                   {#if noDisplay.has(l.code)}<span class="text-muted-foreground shrink-0 text-[10px]" title={t("tr.noDisplayTip")}>{t("tr.noDisplay")}</span>{/if}</span>
                 <span class="text-muted-foreground flex shrink-0 items-center gap-1 text-xs tabular-nums">

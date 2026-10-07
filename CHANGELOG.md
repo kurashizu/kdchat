@@ -3,6 +3,17 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-10-07
+
+### Added
+- The console in Japanese (日本語) and Korean (한국어): Settings → General → Interface language, `?lang=ja` / `?lang=ko`,
+  or the browser's language on the first visit.
+
+### Fixed
+- The "no password" notice on phones: its text ran under the "Set a password" button.
+- Language names in the translation lists use their own script's letter forms (Cyrillic and Greek names were drawn
+  full-width with a Japanese or Chinese interface).
+
 ## [1.8.4] - 2026-10-07
 
 Needs the Klaude avatar uploaded on 2026-10-07 15:43 or later (new font atlas).

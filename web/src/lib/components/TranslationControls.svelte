@@ -11,7 +11,7 @@
   import LanguagePicker from "./LanguagePicker.svelte";
   import SettingRow from "./SettingRow.svelte";
   import { app } from "$lib/app.svelte";
-  import { t } from "$lib/i18n.svelte";
+  import { t, langTag } from "$lib/i18n.svelte";
   import { cn } from "$lib/utils";
 
   let { compact = false }: { compact?: boolean } = $props();
@@ -81,7 +81,7 @@
         <Select.Trigger size="sm" class="w-48">{sourceLabel}</Select.Trigger>
         <Select.Content class="max-h-72">
           <Select.Item value="auto">{t("tr.auto")}</Select.Item>
-          {#each langs as l (l.code)}<Select.Item value={l.code}>{l.native}</Select.Item>{/each}
+          {#each langs as l (l.code)}<Select.Item value={l.code} lang={langTag(l.code)}>{l.native}</Select.Item>{/each}
         </Select.Content>
       </Select.Root>
     </SettingRow>
@@ -90,7 +90,7 @@
         <Select.Root type="single" value={s.latin} onValueChange={(v) => app.setTr({ latin: v })}>
           <Select.Trigger size="sm" class="w-48">{app.langName(s.latin)}</Select.Trigger>
           <Select.Content class="max-h-72">
-            {#each latinLangs as l (l.code)}<Select.Item value={l.code}>{l.native}</Select.Item>{/each}
+            {#each latinLangs as l (l.code)}<Select.Item value={l.code} lang={langTag(l.code)}>{l.native}</Select.Item>{/each}
           </Select.Content>
         </Select.Root>
       </SettingRow>

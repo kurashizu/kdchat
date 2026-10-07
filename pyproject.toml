@@ -1,6 +1,6 @@
 [project]
 name = "kdchat"
-version = "1.8.4"
+version = "1.9.0"
 description = "Send messages to the VRChat chatbox (OSC) from your phone or any browser: web console + REST API"
 requires-python = ">=3.12"
 dependencies = [

@@ -92,10 +92,10 @@
     {/if}
     {#if lanNotice}
       <div class="mx-auto max-w-6xl px-3 pt-3 sm:px-4">
-        <Alert.Root class="border-amber-500/40 text-amber-700 dark:text-amber-400">
+        <Alert.Root class="border-amber-500/40 text-amber-700 has-[>svg]:grid-cols-[auto_1fr_auto] has-data-[slot=alert-action]:pr-3 dark:text-amber-400">
           <TriangleAlert />
           <Alert.Title class="text-current">{t("lan.notice")}</Alert.Title>
-          <Alert.Action class="flex gap-1">
+          <Alert.Action class="static col-start-3 row-start-1 flex items-start gap-1 self-start">
             <Button size="xs" variant="outline" onclick={() => app.openSettings("connection")}>{t("lan.setPw")}</Button>
             <Button size="icon-xs" variant="ghost" aria-label={t("lan.dismiss")} title={t("lan.dismiss")}
               onclick={() => { lanOff = true; store.set("lanNoticeOff", true); }}><X /></Button>
