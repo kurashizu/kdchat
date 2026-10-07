@@ -45,8 +45,9 @@ DEFAULTS = {
     "scale": 1,              # font size of the messages: 1 or 2
     "long": "left",          # single layout, a message too long for the screen: left / up = marquee, cut = cut off
     "speed": "normal",       # marquee speed: slow | normal | fast
-    "show_time": False,      # the time of each message (time zone + time, small font, in the gap above it; replaces the divider)
-    "divider": False,        # a thin rule between messages (off: the alternating colours already separate them)
+    "show_time": True,       # the time of each message on every screen (time zone + time, small font, in the gap above
+                             # it, a rule before it; replaces the divider)
+    "divider": False,        # a thin rule between messages on every screen (off: the alternating colours separate them)
     "clock": True,           # the clock in the header
     "date": True,            # the date on the right of the header
     "invert": False,         # dark text on a light screen
@@ -389,7 +390,7 @@ class KdChat:
         return self.d.cfg.glyph_h(self.wsc(k) if k else self.s["scale"])
 
     def gap_of(self, k):
-        return 8 if k else self.gap
+        return self.gap                                     # (every screen's log looks the same)
 
     def wings_reserved(self):
         """do the side screens get their text regions (the log has 2 x WING_PAGES pages less)?"""
@@ -741,38 +742,49 @@ class KdChat:
                 if self.active:
                     self._step()
 
-    def _fit_wing(self, text, tag, sc=1):
-        """the longest start of `text` (+ "…") that fits a side screen's text region with its tag"""
+    def _fit_wing(self, text, label, top, small=False):
+        """the newest translation on a side screen (single layout), laid out like the main screen's message: centred in
+        the band below the header, the time label (+ its rule) above it. The largest scale it fits whole at, else its
+        longest start (+ "…") at the smallest. -> (compose parts, y of the label row or None)"""
         from kd_display.kd.memory import Memory
-        c = self.d.cfg
-        lh, W, H = c.line_h(sc), c.W, c.H
-        def parts(t):
-            p = [{"s": t, "x": 4, "y": 4, "width": W - 8, "wrap": True, "clip": True, "scale": sc}]
-            if tag:
-                p.append({"s": tag, "x": W - 2 - len(tag) * TINY_W, "y": H - 7, "scale": "tiny"})
-            return p
-        def ok(t):
-            lines = self.d.layout.lines(t, W - 8, sc)
-            if len(lines) * lh > H - 12:
+        c, s = self.d.cfg, self.s
+        W, band = c.W, c.H - top
+        lab = 8 if label else 0
+
+        def parts(t, sc):
+            n = len(self.d.layout.lines(t, W, sc))
+            y0 = top + max(0, (band - lab - n * c.line_h(sc)) // 2)
+            p = [{"s": t, "x": 0, "y": y0 + lab, "width": W, "align": "center", "wrap": True, "clip": True,
+                  "scale": sc, "color": s["color"]}]
+            if label:
+                p.append({"s": label, "x": W - 1 - (len(label) * TINY_W - 1), "y": y0 + 1, "scale": "tiny",
+                          "color": s["meta"]})
+            return p, (y0 if label else None)
+
+        def ok(t, sc):
+            if len(self.d.layout.lines(t, W, sc)) * c.line_h(sc) > band - lab:
                 return False
             runs = []
-            for q in parts(t):
-                r, _ = self.d.layout.runs(q["s"], q["x"], q["y"], q.get("width"), "left", q.get("scale", 1), 1, 0, False,
-                                          q.get("wrap", False), None, q.get("clip", False))
+            for q in parts(t, sc)[0]:
+                r, _ = self.d.layout.runs(q["s"], q["x"], q["y"], q.get("width"), q.get("align", "left"),
+                                          q.get("scale", 1), 1, 0, False, q.get("wrap", False), None, q.get("clip", False))
                 runs += r
             m = Memory(c)
             m.set_runs(runs, limit=WING_PAGES * c.P)
             return m.dropped == 0
-        if ok(text):
-            return text
+        scales = ["small"] if small else [2, 1] if s["scale"] == 2 else [1]
+        for sc in scales:
+            if ok(text, sc):
+                return parts(text, sc)
+        sc = scales[-1]
         lo, hi = 0, len(text)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if ok(text[:mid].rstrip() + "…"):
+            if ok(text[:mid].rstrip() + "…", sc):
                 lo = mid
             else:
                 hi = mid - 1
-        return text[:lo].rstrip() + "…" if lo else ""
+        return parts(text[:lo].rstrip() + "…" if lo else "", sc)
 
     def _draw_wings(self):
         """side screens: their header (the language), the newest translation (single layout) or, in mirror mode, the
@@ -792,14 +804,21 @@ class KdChat:
                 d.remove(f"wh{side}")
                 d.shapes.hide(SHP_WING + side - 1)
             text, tag = self.wing_text.get(side, (None, None))
+            rule = SHP_WLOG[side][0]
             if text and self.wings_reserved() and not mirror:
-                sc = "small" if lang in self.small_langs else 1
-                t = self._fit_wing(text, None, sc)
-                top = HDR + 2 if lang else 4
-                d.compose([{"s": t, "x": 4, "y": top, "width": c.W - 8, "wrap": True, "clip": True, "color": s["color"],
-                            "scale": sc}], id=f"wing{side}", screen=name)
+                newest = next((m for m in reversed(self.msgs) if not m.get("draft")), None)
+                label = self._label(newest) if newest else ""
+                parts, ly = self._fit_wing(text, label, HDR if lang else 0, small=lang in self.small_langs)
+                d.compose(parts, id=f"wing{side}", screen=name)
+                x1 = parts[1]["x"] - 5 if ly is not None else 0
+                if x1 > 8:                                    # the rule left of the time label, as in the log
+                    d.shapes.line(rule, 2, ly + 3, x1, ly + 3, color=s["color"], screen=name)
+                else:
+                    d.shapes.hide(rule)
             else:
                 d.remove(f"wing{side}")
+                if not mirror:
+                    d.shapes.hide(rule)
         pages = MIRROR_PAGES if mirror else WING_PAGES
         d.set(wings=self.wings_open(), wing_pages=(pages, pages))      # (a side screen without text gets no region)
 
@@ -880,16 +899,16 @@ class KdChat:
         return png_bytes(rows, 2)
 
     # ---------------- message layout
-    def _label(self, m, wing=False):
-        """the time label in the gap above a message ("edited" + time zone + time); a side screen always shows the time"""
+    def _label(self, m):
+        """the time label in the gap above a message ("edited" + time zone + time), the same on every screen"""
         s = self.s
         return " ".join(x for x in ("edited" if m.get("edited") and not m.get("reverted") else "",
-                                    f"{tz_label(m['t'])} {m['t'].strftime('%H:%M')}" if s["show_time"] or wing else "") if x)
+                                    f"{tz_label(m['t'])} {m['t'].strftime('%H:%M')}" if s["show_time"] else "") if x)
 
-    def _deco(self, m, wing=False):
+    def _deco(self, m):
         """the time label in the gap above a message, y relative to the gap's top -> text parts (right-aligned; the rule
         left of it and the divider without a label are hardware shapes: _log_shapes)"""
-        label = self._label(m, wing)
+        label = self._label(m)
         if not label:
             return []
         return [{"s": label, "x": self.d.cfg.W - 1 - (len(label) * TINY_W - 1), "y": 1, "scale": "tiny",
@@ -930,9 +949,9 @@ class KdChat:
         m["lines"] = self._lines(body, deco, m["sc"])
         m["h"] = m["gap"] + len(m["lines"]) * self.d.cfg.line_h(m["sc"])
 
-    def _wing_entry(self, side, m, vy0):
+    def _wing_entry(self, side, m, vy0, first=False):
         """a message on a side screen's log: its translation (or itself, written in that language); one not translated
-        (yet) takes no room there"""
+        (yet) takes no room there. Gaps, time labels and dividers as on the main log (first: no message above it)"""
         lang = self.wing_lang[side - 1]
         had = (m.get("tr") or {}).get(lang) or (m["text"] if m.get("lang") == lang else None)
         e = {"lines": [], "gap": 0, "h": 0, "vy0": vy0, "sc": self.wsc(side), "deco": [], "split": False}
@@ -940,12 +959,12 @@ class KdChat:
             return e
         text = "message reverted" if m.get("reverted") else had
         e["sc"] = "small" if m.get("reverted") else self.wsc(side)
-        e["deco"] = self._deco(m, wing=True)
+        e["deco"] = self._deco(m)
         e["split"] = self.pages_of(side) == 1                       # 1-page slots: the time label in a row of its own
         deco = [] if e["split"] else [dict(p, y=p["y"] + 32) for p in e["deco"]]
         e["lines"] = self._lines(text, deco, e["sc"], self.pages_of(side))
-        e["gap"] = 8
-        e["h"] = 8 + len(e["lines"]) * self.d.cfg.line_h(e["sc"])
+        e["gap"] = 8 if e["deco"] else 0 if first else 4
+        e["h"] = e["gap"] + len(e["lines"]) * self.d.cfg.line_h(e["sc"])
         return e
 
     def _relayout(self, last_only=False):
@@ -969,8 +988,10 @@ class KdChat:
             vy0 = prev["vy0"] + prev["h"] if prev else 0
             keep = {m["id"] for m in msgs}
             log.lay = {k: v for k, v in log.lay.items() if k in keep}
+            shown = any(log.lay[m["id"]]["lines"] for m in msgs[:first] if m["id"] in log.lay)
             for m in msgs[first:]:
-                e = self._wing_entry(side, m, vy0)
+                e = self._wing_entry(side, m, vy0, first=not shown)
+                shown = shown or bool(e["lines"])
                 log.lay[m["id"]] = e
                 vy0 += e["h"]
 
@@ -1229,7 +1250,7 @@ class KdChat:
                         y, x1 = e["vy0"] + 3, deco[0]["x"] - 5
                         if x1 > 8 and inside(y, y):
                             want.append(("rule", 2, y, x1 - 2 + 1, cols[m["id"]]))
-                    elif k == 0 and s["divider"]:
+                    elif s["divider"]:
                         y = e["vy0"] + (e["gap"] - 2) // 2
                         if inside(y, y):
                             want.append(("div", (c.W - 39) // 2, y, 39, DIVIDER))
@@ -1275,7 +1296,8 @@ class KdChat:
         d, s, c = self.d, self.s, self.d.cfg
         msgs = self._all()
         m = msgs[-1] if msgs else None
-        sig = (m["text"] if m else None, bool(m and m.get("draft")), tuple(sorted(s.items())),
+        sig = (m["text"] if m else None, bool(m and m.get("draft")), m and m.get("edited"), m and m.get("reverted"),
+               m and m["t"].strftime("%H:%M"), tuple(sorted(s.items())),
                id(self.image), self.typing, self._minute, self.active)
         if sig == self._single_sig and not self._full:
             return
@@ -1284,31 +1306,39 @@ class KdChat:
         self._full = False
         self._single_sig = sig
         d.clear_text()
+        d.set(text_y=0, text_wrap=None, text_clip=None, shape_y=0, wing_shape_y=(0, 0))
+        for i in [*range(SHP_LOG0, SHP_WING), *SHP_WLOG[1], *SHP_WLOG[2]]:   # (not the side screens' headers; the
+            d.shapes.hide(i)                                                  # wings' rules: _base -> _draw_wings)
         self._base()
         top = self.top
-        d.set(text_y=0, text_wrap=None, text_clip=None, shape_y=0)
-        for i in [*range(SHP_LOG0, SHP_WING), *SHP_WLOG[1], *SHP_WLOG[2]]:   # (not the side screens' headers)
-            d.shapes.hide(i)
         if m is not None and self.image is None:
             col = s["meta"] if m.get("draft") else s["color"]          # (the highlight marks the newest line of the log)
             text = "message reverted" if m.get("reverted") else m["text"]
             if m.get("reverted"):
                 col = s["meta"]
+            # like a log message: the time label (+ the rule left of it) right above the text, all centred in the band
+            label = self._label(m)
+            lab = 8 if label else 0
             band = c.H - top
-            placed = False
+            ly = None
             for sc in ([2, 1] if s["scale"] == 2 else [1]):
                 n = len(d.layout.lines(text, c.W, sc))
-                if n * c.line_h(sc) <= band:
-                    y = top + (band - n * c.line_h(sc)) // 2
-                    d.text(text, 0, y, c.W, "center", scale=sc, color=col, id="msg")
-                    placed = True
+                if n * c.line_h(sc) <= band - lab:
+                    ly = top + (band - lab - n * c.line_h(sc)) // 2
+                    d.text(text, 0, ly + lab, c.W, "center", scale=sc, color=col, id="msg")
                     break
-            if not placed:
+            else:
+                ly = top                                             # too long: the label on top, the text runs below
                 if s["long"] == "left":
-                    d.marquee(text, top, c.H, "left", SPEED["left"][s["speed"]], scale=s["scale"], color=col)
+                    d.marquee(text, top + lab, c.H, "left", SPEED["left"][s["speed"]], scale=s["scale"], color=col)
                 elif s["long"] == "up":
-                    d.marquee(text, top, c.H, "up", SPEED["up"][s["speed"]], scale=s["scale"], color=col,
+                    d.marquee(text, top + lab, c.H, "up", SPEED["up"][s["speed"]], scale=s["scale"], color=col,
                               width=c.W, align="center")
                 else:
-                    d.text(text, 0, top, c.W, scale=s["scale"], color=col, id="msg")
+                    d.text(text, 0, top + lab, c.W, scale=s["scale"], color=col, id="msg")
+            if label:
+                x = c.W - 1 - (len(label) * TINY_W - 1)
+                d.text(label, x, ly + 1, scale="tiny", color=s["meta"], wrap=False, id="msglabel")
+                if x - 5 > 8:
+                    d.shapes.line(SHP_LOG0, 2, ly + 3, x - 5, ly + 3, color=col)
         d.present()

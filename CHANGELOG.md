@@ -3,6 +3,15 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.1] - 2026-10-07
+
+### Fixed
+- Every screen of the Klaude display looks the same: "Message time" and "Divider" now apply to the main screen and
+  the side screens alike (the side screens always showed the time, the main screen only with the setting on). Saved
+  settings switch "Message time" on once, so the main screen now matches what the side screens showed.
+- Single layout: the side screens centre the translation like the main screen centres the message, and every screen
+  shows the message's time with its rule above it.
+
 ## [1.8.0] - 2026-10-07
 
 A new console and a much smaller app.

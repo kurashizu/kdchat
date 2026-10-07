@@ -148,6 +148,7 @@ _osc_lock = threading.Lock()
 _typing_state: bool = False
 _outputs: dict = {"chatbox": True, "kd": False}   # both outputs can be on at the same time
 _kd = None                      # kd_chat.KdChat, created at startup
+KD_REV = 2                      # saved kd settings revision (2: show_time covers every screen)
 _state_lock = threading.Lock()
 
 
@@ -165,7 +166,8 @@ def _load_state() -> dict:
 
 def _save_state() -> None:
     with _state_lock:
-        data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {}), "translate": _tr_settings}
+        data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {}), "translate": _tr_settings,
+                "kd_rev": KD_REV}
         tmp = STATE_FILE + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -293,7 +295,11 @@ def _startup() -> None:
                 ip = _resolve_ipv4(host, port)
             except OSError:
                 ip = "127.0.0.1"                          # fixed later in Settings (_apply_osc_target)
-            _kd = kd_chat.KdChat(ip, port, dry=KD_DRY, settings=st.get("kd"))
+            kd_st = dict(st.get("kd") or {})
+            if st.get("kd") and st.get("kd_rev", 1) < 2:
+                kd_st["show_time"] = True                  # 1.8.1: one setting for every screen (the side screens
+                                                           # always showed the time before): on, as they looked
+            _kd = kd_chat.KdChat(ip, port, dry=KD_DRY, settings=kd_st)
         except Exception as e:     # noqa: BLE001
             log.error("Klaude display output failed to start: %r", e)
     else:
