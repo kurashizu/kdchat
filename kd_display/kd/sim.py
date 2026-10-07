@@ -329,6 +329,8 @@ def render(mem, font_png=None, t=0.0, fx_time=None, screen=0):
                 rx = pend + xf if yf == 0 else xf
             cb = c.code_bits[0] if mode == 3 else c.code_bits.get(mode, c.code_bits[2])   # like the shader: 2 / 3 read as extended
             adv = 4 if tiny else 6 if small else ((c.half if mode == 0 else c.cell) + c.gap) * scale
+            if mode == 2:                                   # extended: the pitch of its first code's block
+                adv = (c.width_of(2, bits(buf, (off + c.hdr_bytes) * 8, cb)) + c.gap) * scale
             gh = 5 if tiny else 7 if small else c.cell * scale
             pgi = (off - tb) // c.P
             rs = route_text(pgi)

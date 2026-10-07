@@ -7,6 +7,11 @@ from .config import Config, ROOT, MODE_ASCII, MODE_COMMON, MODE_EXT, MODE_SKIP, 
 
 
 class Charmap:
+    """the glyph table: code point (or Thai cluster) -> glyph. Besides the CJK tables: a half-width block (6 px: Latin,
+    Greek, Cyrillic, symbols; a copy of ASCII first) and a narrow block (8 px: Hebrew, Arabic forms, Thai; a copy of
+    ASCII first), see glyphs_extra.py. A character in both the CJK part and the half block (é, Greek, Cyrillic, “ ...)
+    is drawn half width unless full=True (the layout decides by its neighbours)."""
+
     def __init__(self, path=None):
         with open(path or os.path.join(ROOT, "generated", "charmap.json"), encoding="utf-8") as f:
             cm = json.load(f)
@@ -14,19 +19,48 @@ class Charmap:
         t = cm["table"]
         self.table = [ord(ch) for ch in t] if isinstance(t, str) else t     # (a string since the compact charmap)
         self.n_ascii, self.n_common = cm["ascii"], cm["common"]
-        self.index = {cp: i for i, cp in enumerate(self.table)}
+        self.half_range = tuple(cm.get("half_range", (len(self.table), len(self.table))))
+        self.narrow_range = tuple(cm.get("narrow_range", (len(self.table), len(self.table))))
+        h0, h1 = self.half_range
+        n0, n1 = self.narrow_range
+        self.index, self.half, self.narrow, self.clusters = {}, {}, {}, {}
+        cl = cm.get("clusters", [])
+        for i, cp in enumerate(self.table):
+            if cp >= 0xF0000:                                   # a Thai cluster's stand-in
+                self.clusters[cl[cp - 0xF0000]] = i
+            elif h0 <= i < h1:
+                self.half.setdefault(cp, i)
+            elif n0 <= i < n1:
+                self.narrow.setdefault(cp, i)
+            else:
+                self.index.setdefault(cp, i)
 
-    def mode_of(self, ch):
-        """-> (mode, code) or None if the font has no glyph"""
+    def mode_of(self, ch, full=False):
+        """-> (mode, code) or None if the font has no glyph (ch: a character or a Thai cluster)"""
+        if len(ch) > 1:
+            g = self.clusters.get(ch)
+            return (MODE_EXT, g) if g is not None else None
         cp = ord(ch)
         if 0x20 <= cp < 0x7F:
             return MODE_ASCII, cp - 0x20
+        g = self.half.get(cp)
+        if g is not None and not (full and cp in self.index):
+            return MODE_EXT, g
         g = self.index.get(cp)
         if g is None:
-            return None
+            g = self.narrow.get(cp)
+            return (MODE_EXT, g) if g is not None else None
         if self.n_ascii <= g < self.n_ascii + self.n_common:
             return MODE_COMMON, g - self.n_ascii
         return MODE_EXT, g
+
+    def both(self, ch):
+        """drawn half or full width depending on its neighbours?"""
+        return len(ch) == 1 and ord(ch) in self.half and ord(ch) in self.index
+
+    def ascii_as(self, code, block):
+        """an ASCII glyph's code in the half / narrow block (code = ASCII code, 0 = space)"""
+        return (self.half_range if block == "half" else self.narrow_range)[0] + code
 
 
 class BitWriter:
@@ -307,7 +341,7 @@ class Memory:
                 return None
             out += b
             n_glyphs += len(r.codes); n_runs += 1
-            prev = (r.x, r.y, r.x + (0 if skip else len(r.codes) * c.adv(r.mode, r.scale)))
+            prev = (r.x, r.y, r.x + (0 if skip else len(r.codes) * c.adv(r.mode, r.scale, r.codes[0] if r.codes else None)))
             return True
 
         def pad(x, y, whole):
@@ -375,7 +409,7 @@ class Memory:
                     if res:
                         if first is None:
                             first = n_runs - 1
-                        x += n * c.adv(r.mode, r.scale)
+                        x += n * c.adv(r.mode, r.scale, r.codes[0] if r.codes else None)
                         codes = codes[n:]
                 if res is None:
                     self.dropped += sum(len(x.codes) for x in runs[i:] if isinstance(x, Run))
@@ -401,7 +435,7 @@ class Memory:
                             continue
                         k = len(q.codes)
                     if k < len(q.codes):
-                        pieces.insert(0, Run(q.x + k * c.adv(q.mode, q.scale), q.y, q.mode, q.codes[k:], q.fg, q.bg, q.box, q.scale))
+                        pieces.insert(0, Run(q.x + k * c.adv(q.mode, q.scale, q.codes[0] if q.codes else None), q.y, q.mode, q.codes[k:], q.fg, q.bg, q.box, q.scale))
                         q = Run(q.x, q.y, q.mode, q.codes[:k], q.fg, q.bg, q.box, q.scale)
                 res = pack(q)
                 if res is None:                      # full: this run and everything after it

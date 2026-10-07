@@ -73,7 +73,7 @@
     "font_files": ["fusion-pixel-12px-monospaced-zh_hans.bdf", "fusion-pixel-12px-monospaced-ja.bdf", "fusion-pixel-12px-monospaced-zh_hant.bdf"],
     "cell": 12,
     "half": 6,
-    "atlas_size": 512,
+    "atlas_size": 576,
     "common_bits": 12,
     "ext_bits": 14,
     "ascii_bits": 7,

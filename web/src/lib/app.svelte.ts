@@ -122,7 +122,7 @@ class App {
   kdError = $state<string | null>(null);
   previewUrl = $state("");
 
-  tr = $state<{ settings: TrSettings; languages: Language[]; small_ok: string[] } | null>(null);
+  tr = $state<{ settings: TrSettings; languages: Language[]; small_ok: string[]; no_display?: string[] } | null>(null);
 
   cfg = $state<any>(null);
 

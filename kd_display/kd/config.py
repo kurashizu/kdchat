@@ -83,6 +83,16 @@ class Config:
         self.max_run_len = (1 << self.lenb) - 1
         self.code_bits = {MODE_ASCII: t["ascii_bits"], MODE_COMMON: t["common_bits"], MODE_EXT: t["ext_bits"]}
         self.cell, self.half = t["cell"], t["half"]
+        # extended codes with their own pitch (generated/charmap.json: the half-width and narrow blocks)
+        self.half_range, self.narrow_range, self.narrow = (0, 0), (0, 0), self.half
+        try:
+            with open(os.path.join(ROOT, "generated", "charmap.json"), encoding="utf-8") as f:
+                cm = json.load(f)
+            self.half_range = tuple(cm.get("half_range", (0, 0)))
+            self.narrow_range = tuple(cm.get("narrow_range", (0, 0)))
+            self.narrow = cm.get("narrow", self.half)
+        except (OSError, ValueError):
+            pass
         self.gap, self.line_gap = t.get("gap_px", 0), t.get("line_gap_px", 1)   # extra px after every glyph / between lines (x scale)
         assert self.hdr_bytes * 8 > self.hdr_bits_used, "the text header needs a spare bit for chaining"
         self.chain_bit = self.hdr_bytes * 8 - 1          # top bit: position relative to the previous run (see memory.py)
@@ -230,11 +240,23 @@ class Config:
         import copy
         return copy.copy(self).set_size(v & 15, 2 * self.gscale0 if v & 16 else self.gscale0)
 
-    def adv(self, mode, scale=1):
-        """pixels from one glyph to the next (scale "tiny" / "small": the 3x5 / 5x7 ASCII fonts)"""
+    def width_of(self, mode, code=None):
+        """a glyph's width class in px: 6 (ASCII, the half-width block), 8 (the narrow block) or 12"""
+        if mode == MODE_ASCII:
+            return self.half
+        if mode == MODE_EXT and code is not None:
+            if self.half_range[0] <= code < self.half_range[1]:
+                return self.half
+            if self.narrow_range[0] <= code < self.narrow_range[1]:
+                return self.narrow
+        return self.cell
+
+    def adv(self, mode, scale=1, code=None):
+        """pixels from one glyph to the next (scale "tiny" / "small": the 3x5 / 5x7 ASCII fonts); an extended run's
+        pitch is its first code's block (code)"""
         if scale in SMALL_FONTS:
             return SMALL_FONTS[scale][1]
-        return ((self.half if mode == MODE_ASCII else self.cell) + self.gap) * scale
+        return (self.width_of(mode, code) + self.gap) * scale
 
     def line_h(self, scale=1):
         return SMALL_FONTS[scale][3] if scale in SMALL_FONTS else (self.cell + self.line_gap) * scale

@@ -674,11 +674,17 @@ def _chatbox_compose(text: str, trs: dict) -> str:
     return out
 
 
+def _kd_trs(trs: dict) -> dict:
+    """translations for the display: a script it cannot draw (tr.NO_DISPLAY) becomes a note"""
+    return {k: (f"({tr.LANGUAGES[k][0]}: in the game chatbox only)" if k in tr.NO_DISPLAY else v) for k, v in trs.items()}
+
+
 def _kd_wings(trs: dict, kd_id: Optional[int] = None, src: Optional[str] = None) -> None:
     """a message's translations on the side screens: the chat layout shows them in the translated logs (in step with
     the main one), the single layout the newest one"""
     if _kd is None or not _tr_wings_on():
         return
+    trs = _kd_trs(trs)
     if kd_id is not None:
         _kd.set_translations(kd_id, trs, src)
     sides = _tr_sides()                                   # (a side screen without a language: nothing, it folds)
@@ -830,7 +836,7 @@ def edit_message(message_id: int, body: MessageEdit, user: str = AuthDep) -> Mes
             if newest_kd is msg:
                 _kd_wings(trs, msg.kd_id, src)
             elif _tr_wings_on():
-                _kd.set_translations(msg.kd_id, trs, src)          # an older message: its rows in the translated logs
+                _kd.set_translations(msg.kd_id, _kd_trs(trs), src)  # an older message: its rows in the translated logs
     if use["chatbox"] and latest_cb is msg:
         _cb.send(_chatbox_compose(text, trs) if done else text, done, False)   # the game only shows its newest message
     msg.text, msg.length, msg.edited = text, len(text), edited
@@ -1128,7 +1134,8 @@ def get_translate() -> dict:
     game chatbox gets, 0-2), kd (on the Klaude display's side screens). languages: every language with its download
     state (ready / downloading / error / absent), size and progress. Models are downloaded on request only."""
     return {"settings": _tr_settings, "languages": _tr_models.status(), "models": tr.MODELS_TAG,
-            "small_ok": sorted(tr.LATIN)}           # (the languages the small font can write)
+            "small_ok": sorted(tr.LATIN),           # (the languages the small font can write)
+            "no_display": sorted(tr.NO_DISPLAY)}    # (scripts the display cannot draw: chatbox only)
 
 
 @api.put("/translate", tags=["translate"], summary="Change translation settings (partial update)")

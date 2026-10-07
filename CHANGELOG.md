@@ -3,6 +3,22 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.4] - 2026-10-07
+
+Needs the Klaude avatar uploaded on 2026-10-07 15:43 or later (new font atlas).
+
+### Fixed
+- **Every language the translation offers shows on the Klaude display** (no more □): all Latin letters (German ä ö ß,
+  Polish ł ą ę, Czech ř, Turkish ı ş ğ, Nordic æ ø å, Romanian ș ț, French œ « », Vietnamese with all its tone marks),
+  Greek with accents, Cyrillic incl. Ukrainian і є ї ґ and Serbian ђ ј љ њ ћ џ, Hebrew and Arabic / Persian / Urdu
+  (right to left, Arabic letters joined), Thai (vowel and tone marks stacked on their consonant), € and other currency
+  signs, dashes, quotes, ©, ™, arrows, ♥ ★ ♫, and the Cantonese characters of traditional Chinese.
+- Accented letters, Greek and Cyrillic are as narrow as plain Latin letters (they used to take a whole CJK cell:
+  "caf é"); quotes and dashes are narrow in Latin text and full width in Chinese / Japanese text.
+- Hindi, Marathi, Bengali, Gujarati, Tamil, Telugu, Kannada and Malayalam cannot be drawn on the display (their letters
+  combine in ways a fixed pixel grid cannot show): their translations go to the game chatbox, the side screen says so,
+  and the language list marks them "chatbox only".
+
 ## [1.8.3] - 2026-10-07
 
 ### Fixed

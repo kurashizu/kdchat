@@ -174,7 +174,7 @@ takes `screen=` too.
 
 | Argument | Meaning |
 |---|---|
-| `s` | the text, may contain `\n`. ASCII, all GB2312 hanzi, Japanese (JIS X 0208: kana and both kanji levels), traditional Chinese (Big5 level 1); characters not in the font show as □ |
+| `s` | the text, may contain `\n`. ASCII, all GB2312 hanzi, Japanese (JIS X 0208: kana and both kanji levels), traditional Chinese (Big5 level 1), Korean (KS X 1001), every Latin / Greek / Cyrillic letter incl. Vietnamese (half width), Hebrew and Arabic / Persian / Urdu (right to left, Arabic joined), Thai (consonant + marks clusters), common symbols; a letter the font lacks is drawn without its marks, anything else as □ (Indic scripts: not drawable) |
 | `x`, `y` | top-left corner in screen pixels, any position (off-screen too with `clip=False`, e.g. long marquee lines) |
 | `width` | layout width, default up to the right edge; longer lines wrap (`wrap=True`) |
 | `align` | `left` / `center` / `right` within `width` |
@@ -560,6 +560,12 @@ writes `KD_B0..KD_B29` into its copy of that page; the words stay when the id ch
 
 Glyph codes: ASCII 7 bits, the common page (kana + 3,755 hanzi) 12 bits, everything else 14 bits; a stretch that mixes
 common and extended full-width glyphs is written in the extended mode alone when that is shorter (Japanese).
+An extended run's pitch is the block of its first code (charmap `half_range`: 6 px + 1, Latin / Greek / Cyrillic /
+symbols, ASCII copies first; `narrow_range`: 8 px + 1, Hebrew, Arabic presentation forms, Thai clusters, ASCII copies
+first; else 12 px + 1), so a run never mixes blocks. The layout (`kd/scripts.py`) orders right-to-left lines for
+drawing, shapes Arabic, clusters Thai, and takes ASCII letters next to accented ones from the half-width block when
+that saves run headers. Characters the font has in both widths (é, Greek, “ …) follow their neighbours: full width
+next to CJK, half width otherwise. Thai clusters are private-use code points in the charmap table (`clusters`).
 
 **Checksums.** The memory is held as 16-bit words split over several renderers. For each renderer the client sends
 `sum((2 * i + 1) * word_i) mod 65536` over that renderer's words (`i` = the word's index in the renderer, the checksum

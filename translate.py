@@ -48,6 +48,10 @@ LANGUAGES = {
 LATIN = frozenset("en es fr de it pt pl nl sv nb no da fi cs sk sl hu ro lt lv et is ca gl eu tr az id ms af sq bs hr "
                   "hbs".split())
 
+# scripts the Klaude display cannot draw (Indic: conjuncts and reordered vowel signs need a shaping engine; the display
+# has fixed glyph cells): these translations go to the game chatbox only, the side screen says so
+NO_DISPLAY = frozenset("hi mr bn gu ta te kn ml".split())
+
 _ALIGN = {"model": 256, "lex": 64, "vocab": 64, "srcvocab": 64, "trgvocab": 64}
 
 

@@ -31,6 +31,8 @@ const en = {
 
   "common.cancel": "Cancel",
   "common.dontAsk": "Don't ask again",
+  "tr.noDisplay": "chatbox only",
+  "tr.noDisplayTip": "The Klaude display cannot draw this script; the translation goes to the game chatbox.",
   "common.save": "Save",
   "common.reset": "Reset to default",
   "common.close": "Close",
@@ -338,6 +340,8 @@ const zh: Dict = {
 
   "common.cancel": "取消",
   "common.dontAsk": "记住选择，下次不再提示",
+  "tr.noDisplay": "仅聊天框",
+  "tr.noDisplayTip": "Klaude 显示屏画不出这种文字，译文只发到游戏聊天框。",
   "common.save": "保存",
   "common.reset": "恢复默认",
   "common.close": "关闭",

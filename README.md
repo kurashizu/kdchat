@@ -78,4 +78,5 @@ see [docs/KD_DRIVER.md](docs/KD_DRIVER.md) and `examples/hello_kd.py`.
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The display font
-is [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (SIL Open Font License 1.1).
+is [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) with Hebrew, Arabic and Thai from
+[GNU Unifont](https://unifoundry.com/unifont/) (both SIL Open Font License 1.1).

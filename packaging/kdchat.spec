@@ -42,7 +42,7 @@ hiddenimports = (
     + ["kd_chat", "netinfo", "kdchat_config", "version", "segno", "translate", "bergamot_wasm", "imgproc"]
     + collect_submodules("wasmtime")
     # what kd_display/kd/*.py imports (it is not analysed: it is loaded from the data folder)
-    + ["http.server", "copy", "random", "zlib", "struct", "base64", "math"]
+    + ["http.server", "copy", "random", "zlib", "struct", "base64", "math", "unicodedata"]
 )
 if sys.platform == "win32":                    # the app window (pywebview on the system's Edge WebView2)
     hiddenimports += collect_submodules("webview")

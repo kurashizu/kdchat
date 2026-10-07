@@ -28,6 +28,7 @@
     tick().then(() => triggerRef?.focus());
   }
   const mb = (l: Language) => Math.round((l.size ?? 0) / 1e6);
+  const noDisplay = $derived(new Set(app.tr?.no_display ?? []));
 </script>
 
 <Popover.Root bind:open>
@@ -48,7 +49,8 @@
             {#each ready as l (l.code)}
               <Command.Item value={`${l.native} ${l.name} ${l.code}`} onSelect={() => pick(l)}>
                 <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate">{l.native}</span>
-                  <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span></span>
+                  <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span>
+                  {#if noDisplay.has(l.code)}<span class="text-muted-foreground shrink-0 text-[10px]" title={t("tr.noDisplayTip")}>{t("tr.noDisplay")}</span>{/if}</span>
                 <Check class="text-primary" />
               </Command.Item>
             {/each}
@@ -59,7 +61,8 @@
             {#each other as l (l.code)}
               <Command.Item value={`${l.native} ${l.name} ${l.code}`} onSelect={() => pick(l)}>
                 <span class="flex min-w-0 flex-1 items-baseline gap-2"><span class="truncate">{l.native}</span>
-                  <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span></span>
+                  <span class="text-muted-foreground truncate text-xs">{l.native === l.name ? "" : l.name}</span>
+                  {#if noDisplay.has(l.code)}<span class="text-muted-foreground shrink-0 text-[10px]" title={t("tr.noDisplayTip")}>{t("tr.noDisplay")}</span>{/if}</span>
                 <span class="text-muted-foreground flex shrink-0 items-center gap-1 text-xs tabular-nums">
                   <Download class="size-3.5" />{mb(l)} MB
                 </span>

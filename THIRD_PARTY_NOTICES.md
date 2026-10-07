@@ -8,6 +8,7 @@ project pages.
 | Component | License | Used for |
 |---|---|---|
 | [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) | SIL Open Font License 1.1 (`kd_display/generated/OFL.txt`) | Klaude display font atlas (`kd_display/generated/kd_font.png`) |
+| [GNU Unifont](https://unifoundry.com/unifont/) 16.0.04 | SIL Open Font License 1.1 (`kd_display/generated/UNIFONT-OFL.txt`) | Hebrew, Arabic and Thai glyphs in the display font atlas (fitted to 12 px) |
 | [Python](https://www.python.org/) | PSF License 2.0 | runtime (bundled in the `.exe`) |
 | [FastAPI](https://github.com/fastapi/fastapi) | MIT | web framework |
 | [Starlette](https://github.com/encode/starlette) | BSD-3-Clause | web framework |
