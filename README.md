@@ -1,8 +1,8 @@
 # kdchat
 
 Type into the VRChat chatbox from your phone or any browser. kdchat runs next to VRChat, shows a simple chat console
-and sends what you type to VRChat. With the [Klaude avatar](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136)
-it also shows your messages on the pixel display above Klaude's head.
+and sends what you type to VRChat. With a **KuraDot** avatar (or [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136))
+it also shows your messages on the pixel display above your head.
 
 <p>
   <img src="docs/screenshot-phone.png" alt="The console on a phone" width="260">
@@ -37,7 +37,7 @@ Closing the window stops kdchat.
 Anyone on your network can use the console until you set a password (**Settings → Connection → Password**). At home
 that is usually fine; on a shared network, set one.
 
-## The Klaude display
+## The KuraDot display
 
 Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c166f2a35136) or an avatar with KuraDot
 (try one of the demo avatars linked in the table below)? Turn on
@@ -62,7 +62,7 @@ font (default: English), so longer translations fit.
 
 Tap **Translate** under the input box, switch it on and add up to two languages (each downloads once, about 50-90 MB).
 Every message you send is then translated on your own computer (nothing goes online): the game chatbox shows the
-original plus the translations that fit, and the Klaude display shows the chat translated on its side screens. Your
+original plus the translations that fit, and the KuraDot display shows the chat translated on its side screens. Your
 typing language is detected automatically. Language packs and the rest: **Settings → Translation**.
 
 Want to put your own things on the display (a clock, now playing, games)? The display driver is in this repository:
@@ -82,7 +82,7 @@ see [docs/KD_DRIVER.md](docs/KD_DRIVER.md) and `examples/hello_kd.py`.
 ## More
 
 - [docs/ADVANCED.md](docs/ADVANCED.md): all settings, running on macOS / Linux or a server, the REST API, development.
-- [docs/KD_DRIVER.md](docs/KD_DRIVER.md): the Klaude display driver API, for your own programs.
+- [docs/KD_DRIVER.md](docs/KD_DRIVER.md): the KuraDot / Klaude display driver API, for your own programs.
 - [CHANGELOG.md](CHANGELOG.md): what changed.
 
 ## License

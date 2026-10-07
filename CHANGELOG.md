@@ -3,6 +3,11 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.10.1] - 2026-10-07
+
+### Changed
+- The console calls the display "KuraDot display" (Klaude avatars are the Full version of it).
+
 ## [1.10.0] - 2026-10-07
 
 ### Added
