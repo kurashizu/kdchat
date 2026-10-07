@@ -54,7 +54,6 @@ export interface KdStatus {
   lowres: boolean;
   palette: string[];
   tier?: string;
-  tier_detected?: { tier: string; avatar: string; name: string } | null;
   max_wings?: number;
   hires?: boolean;
   width: number;
@@ -133,6 +132,10 @@ class App {
   // the settings dialog (open + tab), opened from anywhere
   settingsOpen = $state(false);
   settingsTab = $state("general");
+
+  // the first-run setup (a new install), shown once per page load at most
+  setupOpen = $state(false);
+  private setupShown = false;
 
   private syncTimer: ReturnType<typeof setTimeout> | undefined;
   private chain: Promise<unknown> = Promise.resolve();
@@ -508,6 +511,45 @@ class App {
     } catch {
       /* the dialog shows what it has */
     }
+    if (this.cfg?.setup_done === false && !this.setupShown) this.openSetup();
+  }
+
+  // ------------------------------------------------------------ first-run setup
+  async openSetup() {
+    this.setupShown = true;
+    this.settingsOpen = false;
+    if (this.kdAvailable && !this.kd) await this.loadKd();
+    this.setupOpen = true;
+  }
+
+  private async setupDone() {
+    try {
+      await api("/setup", "PUT", { done: true });
+      if (this.cfg) this.cfg.setup_done = true;
+    } catch (e) {
+      failed(e);
+    }
+  }
+
+  /** tier = the avatar's KuraDot version (the display is turned on), null = no KuraDot (the display stays off) */
+  async finishSetup(tier: string | null) {
+    if (this.kdAvailable) {
+      if (tier) {
+        if (!this.kd) await this.loadKd();
+        if (this.kd && this.kd.settings.tier !== tier) await this.setKd({ tier });
+        if (!this.out.kd) await this.loadOutputs({ kd: true });
+      } else if (this.out.kd) {
+        await this.loadOutputs({ kd: false });
+      }
+    }
+    await this.setupDone();
+    this.setupOpen = false;
+  }
+
+  async skipSetup() {
+    if (!this.setupOpen && this.cfg?.setup_done) return;
+    this.setupOpen = false;
+    await this.setupDone();
   }
 
   async put(path: string, body: unknown, method = "PUT") {

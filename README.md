@@ -23,7 +23,9 @@ it also shows your messages on the pixel display above your head.
 2. Double-click it. If Windows says **"Windows protected your PC"**, click **More info → Run anyway** (the app is not
    code-signed).
 3. When Windows Firewall asks, allow **Private networks** (so your phone can connect).
-4. In VRChat, turn on OSC: **Action Menu → Options → OSC → Enabled**.
+4. The first time, a short setup asks for your language, walks you through turning on OSC in VRChat
+   (**Action Menu → Options → OSC → Enabled**) and asks which avatar you use (KuraDot Full / Standard / Lite, or none).
+   Run it again any time: **Settings → General → Setup**.
 5. Type in the kdchat window and press Enter. Your message appears in the VRChat chatbox.
 
 Closing the window stops kdchat.
@@ -45,8 +47,8 @@ Wearing [Klaude](https://vrchat.com/home/avatar/avtr_a89b23ff-8a4b-427b-b3b6-c16
 time, a typing indicator and pictures you paste in (any common format, phone photos included). Everyone around you sees
 it, including people who join later. With any other avatar, leave it off.
 
-KuraDot comes in three versions that use fewer of the avatar's synced parameters (**Settings → Display → Avatar
-version**; Auto finds it when kdchat runs on the VRChat computer):
+KuraDot comes in three versions that use fewer of the avatar's synced parameters. Pick the one on your avatar in the
+first-run setup or in **Settings → Display → Avatar version** (it must match the avatar):
 
 | Version | Synced parameters | Speed | Leaves out |
 |---|---|---|---|

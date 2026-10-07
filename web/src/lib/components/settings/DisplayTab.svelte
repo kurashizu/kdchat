@@ -20,17 +20,9 @@
   let size = $state(40);
   $effect(() => { if (s) size = Math.round(s.size * 100); });
   const h3 = "text-muted-foreground mt-6 mb-1 text-xs font-semibold tracking-wide uppercase";
-  // the avatar's sync tier: what auto found, and what the lite tier leaves out
+  // the avatar's version (picked by hand) and what the lite tier leaves out
   const lite = $derived(app.kdStat?.tier === "lite");
-  const tierDesc = $derived.by(() => {
-    const st = app.kdStat;
-    const parts = [t("tier.desc")];
-    if ((s?.tier ?? "auto") === "auto")
-      parts.push(st?.tier_detected ? t("tier.detected", { tier: opt("tier", st.tier_detected.tier), name: st.tier_detected.name || st.tier_detected.avatar })
-        : t("tier.notFound"));
-    if (lite) parts.push(t("tier.lite.note"));
-    return parts.join(" ");
-  });
+  const tierDesc = $derived(t("tier.desc") + (lite ? " " + t("tier.lite.note") : ""));
 </script>
 
 {#if !app.kdAvailable}
@@ -40,10 +32,10 @@
 {:else}
   <div class="divide-y">
     <SettingRow label={t("set.tier")} desc={tierDesc}>
-      <Select.Root type="single" value={s.tier ?? "auto"} onValueChange={(v) => app.setKd({ tier: v })}>
-        <Select.Trigger size="sm" class="w-48">{opt("tier", s.tier ?? "auto")}</Select.Trigger>
+      <Select.Root type="single" value={s.tier ?? "full"} onValueChange={(v) => app.setKd({ tier: v })}>
+        <Select.Trigger size="sm" class="w-48">{opt("tier", s.tier ?? "full")}</Select.Trigger>
         <Select.Content>
-          {#each ch.tier ?? ["auto", "full", "standard", "lite"] as v (v)}<Select.Item value={v}>{opt("tier", v)}</Select.Item>{/each}
+          {#each ch.tier ?? ["full", "standard", "lite"] as v (v)}<Select.Item value={v}>{opt("tier", v)}</Select.Item>{/each}
         </Select.Content>
       </Select.Root>
     </SettingRow>

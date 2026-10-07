@@ -16,6 +16,7 @@
   import History from "$lib/components/History.svelte";
   import PhoneCard from "$lib/components/PhoneCard.svelte";
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte";
+  import SetupWizard from "$lib/components/SetupWizard.svelte";
   import { app } from "$lib/app.svelte";
   import { isPicture } from "$lib/decode";
   import { store } from "$lib/api";
@@ -80,6 +81,7 @@
 <Toaster position={phone ? "top-center" : "bottom-right"} richColors closeButton />
 <ConfirmDialog />
 <SettingsDialog />
+<SetupWizard />
 
 <Tooltip.Provider delayDuration={300}>
   <div class="bg-background text-foreground min-h-dvh">

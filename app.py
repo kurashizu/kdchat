@@ -149,6 +149,7 @@ _typing_state: bool = False
 _outputs: dict = {"chatbox": True, "kd": False}   # both outputs can be on at the same time
 _kd = None                      # kd_chat.KdChat, created at startup
 KD_REV = 2                      # saved kd settings revision (2: show_time covers every screen)
+_setup = {"done": False}        # the first-run setup (OSC, the avatar's version) was finished or skipped
 _state_lock = threading.Lock()
 
 
@@ -167,7 +168,7 @@ def _load_state() -> dict:
 def _save_state() -> None:
     with _state_lock:
         data = {"outputs": _outputs, "kd": _kd.s if _kd else _load_state().get("kd", {}), "translate": _tr_settings,
-                "kd_rev": KD_REV}
+                "kd_rev": KD_REV, "setup_done": _setup["done"]}
         tmp = STATE_FILE + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -288,6 +289,7 @@ def _startup() -> None:
     if SETTINGS.warning:
         log.warning(SETTINGS.warning)
     st = _load_state()
+    _setup["done"] = bool(st.get("setup_done", bool(st)))   # (an install from before 1.11 was set up already)
     host, port = SETTINGS.value("osc_host"), SETTINGS.value("osc_port")
     if kd_chat is not None:
         try:
@@ -299,6 +301,8 @@ def _startup() -> None:
             if st.get("kd") and st.get("kd_rev", 1) < 2:
                 kd_st["show_time"] = True                  # 1.8.1: one setting for every screen (the side screens
                                                            # always showed the time before): on, as they looked
+            if kd_st.get("tier") == "auto":
+                kd_st["tier"] = "full"                     # 1.11: picked by hand (1.10's "auto" detected it)
             _kd = kd_chat.KdChat(ip, port, dry=KD_DRY, settings=kd_st)
             _kd.on_tier = _tr_apply                      # (lite: one side screen -> the languages are re-assigned)
         except Exception as e:     # noqa: BLE001
@@ -1125,7 +1129,20 @@ def get_qr(url: str = Query(..., max_length=300, description="The URL to encode 
 @api.get("/settings", tags=["settings"], summary="All settings at once")
 def get_settings(request: Request) -> dict:
     return {"version": __version__, "osc": _osc_body(), "server": _server_body(), "password": get_password(),
-            "network": _network_body(request), "warning": SETTINGS.warning}
+            "network": _network_body(request), "warning": SETTINGS.warning, "setup_done": _setup["done"]}
+
+
+class SetupState(BaseModel):
+    """The first-run setup."""
+    done: bool = Field(..., description="Finished (or skipped): the console stops offering it; false shows it again")
+
+
+@api.put("/setup", tags=["settings"], summary="Mark the first-run setup finished (or show it again)")
+def put_setup(body: SetupState, user: str = AuthDep) -> dict:
+    _setup["done"] = body.done
+    _save_state()
+    log.info("setup done=%s user=%s", body.done, user)
+    return {"done": _setup["done"]}
 
 
 # ---------------------------------------------------------------- translation
@@ -1216,8 +1233,8 @@ def get_kd_settings() -> dict:
     """All options and their choices: layout (chat/single), scale (1/2), long (left/up/cut), speed, show_time,
     divider, clock, date, invert, highlight, image_full, color / alt / accent / meta (palette index; alt 0 = off),
     image_fit, image_screen, image_res (high / low: full resolution or 2×2 pixels, low is ~3× faster), size (the
-    display's width in metres, 0.20-0.60), screen, tier (the avatar's sync tier: auto / full / standard / lite; auto = from
-    VRChat's OSC files on this computer, see GET /kd/status tier_detected)."""
+    display's width in metres, 0.20-0.60), screen, tier (the avatar's version: full / standard / lite; the Klaude avatar is
+    full)."""
     k = _need_kd()
     return {"settings": k.s, "choices": {k2: list(v) for k2, v in kd_chat.CHOICES.items()}, "defaults": kd_chat.DEFAULTS}
 

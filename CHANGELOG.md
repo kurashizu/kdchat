@@ -3,6 +3,18 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] - 2026-10-07
+
+### Added
+- **First-run setup**: a new install opens a short guide: the interface language, turning on OSC in VRChat, and which
+  avatar you use (KuraDot Full / Standard / Lite, or none: the display then stays off). Settings → General → Setup runs
+  it again. `PUT /api/v1/setup`, `setup_done` in `GET /api/v1/settings`.
+
+### Changed
+- The avatar version is chosen by hand (setup or Settings → Display); the automatic detection from VRChat's OSC files
+  is gone (it could not tell which avatar is worn, and nothing when kdchat runs on another computer). A saved "Auto"
+  becomes Full.
+
 ## [1.10.1] - 2026-10-07
 
 ### Changed

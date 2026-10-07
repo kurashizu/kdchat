@@ -22,6 +22,9 @@
 </script>
 
 <div class="divide-y">
+  <SettingRow label={t("gen.setup")} desc={t("gen.setupDesc")}>
+    <Button variant="outline" size="sm" onclick={() => app.openSetup()}>{t("gen.setupRun")}</Button>
+  </SettingRow>
   <SettingRow label={t("gen.language")}>
     <Select.Root type="single" value={i18n.lang} onValueChange={(v) => setLang(v as Lang)}>
       <Select.Trigger size="sm" class="w-40">{LANGS.find(([k]) => k === i18n.lang)?.[1]}</Select.Trigger>

@@ -1,47 +1,44 @@
-"""The avatar's sync tier (KuraDot full / standard / lite): detected from VRChat's OSC files, chosen in the settings; the
-lite tier sends pictures in low resolution and opens one side screen (a second translation: game chatbox only)."""
+"""The avatar's version (KuraDot full / standard / lite; Klaude = full): chosen by the user (first-run setup or the
+settings); the lite tier sends pictures in low resolution and opens one side screen (a second translation: game chatbox
+only)."""
 import json
-import os
 
-import tier_detect
 from test_engine_images import _raw
 from test_translate_wings import _flush, _mirror_client
 
 
-def _avatar(d, user, avatar, names, name="Test", age=0):
-    p = os.path.join(d, user, "Avatars", avatar + ".json")
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    with open(p, "w", encoding="utf-8-sig") as f:              # (VRChat writes a BOM)
-        json.dump({"id": avatar, "name": name, "parameters": [{"name": n} for n in names]}, f)
-    t = 1_700_000_000 + age
-    os.utime(p, (t, t))
-
-
-def test_detect(tmp_path, monkeypatch):
-    monkeypatch.setenv("KDCHAT_VRC_OSC_DIR", str(tmp_path))
-    assert tier_detect.detect() is None
-    _avatar(tmp_path, "usr_a", "avtr_plain", ["VRCEmote"], age=50)
-    assert tier_detect.detect() is None
-    _avatar(tmp_path, "usr_a", "avtr_full", ["KD_P", "KD_B0"], "Klaude", age=10)
-    _avatar(tmp_path, "usr_a", "avtr_lite", ["KD_P", "KD_S0", "KD_S1", "KD_B0"], "Stick", age=20)
-    assert tier_detect.detect() == {"tier": "lite", "avatar": "avtr_lite", "name": "Stick"}   # the newest with KD_*
-    _avatar(tmp_path, "usr_b", "avtr_std", ["KD_P", "KD_S0"], "Std", age=30)
-    assert tier_detect.detect()["tier"] == "standard"
-
-
-def test_setting_and_auto(make_client, tmp_path, monkeypatch):
-    monkeypatch.setenv("KDCHAT_VRC_OSC_DIR", str(tmp_path))
+def test_setting(make_client):
     c = make_client()
-    a = c.app_module
-    k = a._kd
+    k = c.app_module._kd
     assert k.d.cfg.tier == "full" and c.get("/api/v1/kd/status").json()["tier"] == "full"
-    assert c.put("/api/v1/kd/settings", json={"tier": "huge"}).status_code == 400
+    assert c.get("/api/v1/kd/settings").json()["choices"]["tier"] == ["full", "standard", "lite"]
+    for bad in ("huge", "auto"):
+        assert c.put("/api/v1/kd/settings", json={"tier": bad}).status_code == 400
     c.put("/api/v1/kd/settings", json={"tier": "standard"})
     assert k.d.cfg.tier == "standard" and k.d.cfg.params()[:2] == ["KD_P", "KD_S0"]
-    _avatar(tmp_path, "usr_a", "avtr_x", ["KD_P", "KD_S0", "KD_S1"], "Stick")
-    c.put("/api/v1/kd/settings", json={"tier": "auto"})
+    c.put("/api/v1/kd/settings", json={"tier": "lite"})
     st = c.get("/api/v1/kd/status").json()
-    assert st["tier"] == "lite" and st["tier_detected"]["name"] == "Stick" and st["max_wings"] == 1 and not st["hires"]
+    assert st["tier"] == "lite" and st["max_wings"] == 1 and not st["hires"] and "tier_detected" not in st
+
+
+def test_old_auto_setting_is_full(make_client, tmp_path):
+    (tmp_path / "state.json").write_text(json.dumps({"kd": {"tier": "auto"}, "kd_rev": 2}))
+    c = make_client()
+    assert c.app_module._kd.s["tier"] == "full" and c.app_module._kd.d.cfg.tier == "full"
+
+
+def test_first_run_setup(make_client, tmp_path):
+    c = make_client()
+    assert c.get("/api/v1/settings").json()["setup_done"] is False          # a new install: the console offers it
+    assert c.put("/api/v1/setup", json={"done": True}).json() == {"done": True}
+    assert json.loads((tmp_path / "state.json").read_text())["setup_done"] is True
+    c2 = make_client()
+    assert c2.get("/api/v1/settings").json()["setup_done"] is True
+
+
+def test_setup_done_for_old_installs(make_client, tmp_path):
+    (tmp_path / "state.json").write_text(json.dumps({"outputs": {"chatbox": True, "kd": True}, "kd_rev": 2}))
+    assert make_client().get("/api/v1/settings").json()["setup_done"] is True
 
 
 def test_lite_one_side_screen(make_client, monkeypatch):
