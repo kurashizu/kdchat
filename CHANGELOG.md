@@ -3,6 +3,19 @@
 All notable changes to kdchat. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.2] - 2026-10-07
+
+### Fixed
+- **Fill keyboard** left the game's keyboard empty: what the console was still doing in the chatbox (a live draft, a
+  live update waiting for its turn, the typing indicator renewed every 5 s) reached the game after the fill. Now the
+  live draft is dropped and the typing indicator switched off first, the fill waits for the chatbox's rate limit, and
+  nothing follows it; the input box is emptied (the text is in the game's keyboard).
+- The Live button's icon was orange on orange while Live is on.
+
+### Added
+- "Turn off the Klaude display?" can be answered once for good ("Don't ask again"); Settings > General > Hidden
+  confirmations brings it back.
+
 ## [1.8.1] - 2026-10-07
 
 ### Fixed

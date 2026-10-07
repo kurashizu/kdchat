@@ -133,7 +133,7 @@
           <Toggle {...props} variant="outline" size="sm" pressed={app.live} onPressedChange={(v) => app.setPref("live", v)}
             onpointerdown={keep} aria-label={t("composer.liveTip")}
             class="">
-            <Radio class={cn(status === "live" && "text-primary animate-pulse")} />
+            <Radio class={cn(status === "live" && "animate-pulse")} />
             <span class="max-sm:sr-only">{t("composer.live")}</span>
           </Toggle>
         {/snippet}

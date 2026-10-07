@@ -714,6 +714,13 @@ class _ChatboxThrottle:
             self.timer.daemon = True
             self.timer.start()
 
+    def drop(self) -> None:
+        """forget a live update still waiting for its turn"""
+        with self.lock:
+            if self.timer is not None:
+                self.timer.cancel(); self.timer = None
+            self.pending = None
+
     def _flush(self) -> None:
         with self.lock:
             if self.pending is not None:
@@ -735,6 +742,7 @@ def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
     """Goes to the outputs that are on (or the ones in `targets`). `final=false`: still being typed, shown live
     (the display in place, the game chatbox throttled); then `PATCH /messages/{id}` to update / finish it,
     `DELETE /messages/{id}` to drop it. `immediate=false`: only put it into the game's keyboard."""
+    global _typing_timer
     final = bool(req.final) and not req.live
     use = _use(req.targets)
     text = _validate_text(req.text, use)
@@ -742,6 +750,16 @@ def create_message(req: MessageCreate, user: str = AuthDep) -> MessageItem:
         raise HTTPException(status_code=409, detail="No output to send to: turn on the game chatbox or the Klaude display")
     if not req.immediate:                                      # only into the game's keyboard (not sent)
         if use["chatbox"]:
+            # (nothing may follow it into the chatbox: a waiting live update or the typing indicator would make the
+            # game replace / empty the keyboard)
+            _cb.drop()
+            if _typing_timer is not None:
+                _typing_timer.cancel(); _typing_timer = None
+            if _typing_state or _cb_typing:
+                _typing_apply(False)
+            wait = _cb.GAP - (time.monotonic() - _cb.last)     # (the chatbox was just written / cleared: the game's
+            if wait > 0:                                       # rate limit would drop the fill)
+                time.sleep(wait)
             _chatbox_send(text, False, False)
         return MessageItem(id=0, text=text, immediate=False, sfx=False, output="chatbox",
                            created_at=datetime.now(timezone.utc).isoformat(), length=len(text), targets=["chatbox"])
@@ -895,8 +913,9 @@ def _typing_apply(on: bool, targets: Optional[list[str]] = None) -> None:
     use = _use(targets)
     if _kd is not None and _outputs["kd"]:
         _kd.set_typing(_typing_state and use["kd"])            # (off where this text does not go)
-    if _outputs["chatbox"]:
-        _chatbox_typing(_typing_state and use["chatbox"])
+    cb = _typing_state and use["chatbox"]
+    if _outputs["chatbox"] and (cb or _cb_typing):             # (off only when it is on: nothing after a keyboard fill)
+        _chatbox_typing(cb)
 
 
 @api.put("/typing", response_model=TypingState, tags=["typing"], summary="Set the typing indicator")

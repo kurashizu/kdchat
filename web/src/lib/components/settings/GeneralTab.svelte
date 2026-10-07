@@ -4,7 +4,9 @@
   import Sun from "@lucide/svelte/icons/sun";
   import { mode, setMode, userPrefersMode } from "mode-watcher";
   import * as Select from "$lib/components/ui/select";
+  import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
+  import { resetSkipped, skipped } from "$lib/confirm.svelte";
   import * as ToggleGroup from "$lib/components/ui/toggle-group";
   import SettingRow from "../SettingRow.svelte";
   import { app } from "$lib/app.svelte";
@@ -46,4 +48,7 @@
       <Switch checked={app[key]} onCheckedChange={(v) => app.setPref(key, v)} aria-label={t(label)} />
     </SettingRow>
   {/each}
+  <SettingRow desc={t("gen.confirmsDesc")} label={t("gen.confirms")}>
+    <Button variant="outline" size="sm" disabled={!skipped.keys.length} onclick={resetSkipped}>{t("gen.confirmsReset")}</Button>
+  </SettingRow>
 </div>

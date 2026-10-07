@@ -17,7 +17,7 @@
 
   async function toggle(k: Target) {
     const on = !app.out[k];
-    if (!on && k === "kd" && !(await ask({ title: t("out.confirmKdOffTitle"), desc: t("out.confirmKdOff"), action: t("out.turnOff") }))) return;
+    if (!on && k === "kd" && !(await ask({ title: t("out.confirmKdOffTitle"), desc: t("out.confirmKdOff"), action: t("out.turnOff"), remember: "kdOff" }))) return;
     app.setOutput(k, on);
   }
 

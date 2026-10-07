@@ -330,6 +330,9 @@ class App {
   async fillKeyboard() {
     const v = this.text;
     if (!v.trim()) return;
+    // the text moves to the game's keyboard: first end what this page does in the chatbox (a live draft, the typing
+    // indicator and its renewal: the game would overwrite / empty the keyboard), then fill it
+    await this.cancel();
     try {
       await api("/messages", "POST", { text: v, immediate: false, targets: ["chatbox"] });
       toast(t("composer.kbFillDone"));
